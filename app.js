@@ -155,7 +155,7 @@
     rateTimer: 0,
     sim: {},            // simulator values the viewer changed
   };
-  const TABS = ["patrimoine", "depenses", "simulateur"];
+  const TABS = ["patrimoine", "depenses", "banque", "simulateur"];
   {
     const h = (location.hash || "").slice(1);
     let t = TABS.includes(h) ? h : null;
@@ -208,6 +208,7 @@
     renderBudget();
     renderFreedom();
     renderSim();
+    renderBank();
     document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === S.view)));
     document.querySelectorAll("[data-age]").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.age) === S.age)));
     $("chart-title").textContent = S.view === "capital" ? "Mon capital mois par mois" : "Ce que mon argent rapporte tout seul, par mois";
@@ -687,6 +688,7 @@
     renderTabs();
     renderHeader();
     if (t === "patrimoine") renderChart();
+    if (t === "banque") renderBank();
     if (focus) $("t-" + t).focus();
   }
   document.querySelectorAll("[data-tab]").forEach((b) => {
@@ -981,6 +983,946 @@
     try { localStorage.removeItem("patrimoine-sim"); } catch (e) {}
     renderSim();
   });
+
+  /* ---------------- ma banque : relevés PDF, classement, prévu et réel ---------------- */
+  const RL = window.PatrimoineReleve || null;
+  const MOIS_COURT = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+  const dParts = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); return m ? { y: +m[1], m: +m[2], d: +m[3] } : null; };
+  const dShort = (iso) => { const p = dParts(iso); return p ? `${p.d} ${MOIS_COURT[p.m - 1]}` : ""; };
+  const dNum = (iso) => { const p = dParts(iso); return p ? `${String(p.d).padStart(2, "0")}/${String(p.m).padStart(2, "0")}` : ""; };
+  const dayIdx = (iso) => { const p = dParts(iso); return p ? Math.round(Date.UTC(p.y, p.m - 1, p.d) / 864e5) : 0; };
+  const isoOfDay = (t) => new Date(t * 864e5).toISOString().slice(0, 10);
+  const periodLabel = (r) => {
+    const a = dParts(r.debut), b = dParts(r.fin);
+    if (!a || !b) return r.id;
+    return `Du ${a.d} ${MONTHS[a.m - 1]}${a.y !== b.y ? " " + a.y : ""} au ${b.d} ${MONTHS[b.m - 1]} ${b.y}`;
+  };
+  const periodChip = (r) => `${dShort(r.debut)} → ${dShort(r.fin)}`;
+  const money = (v) => EUR2.format(Math.abs(v) < 0.005 ? 0 : v).replace("-", "−");
+  const signed = (v) => (v > 0.004 ? "+" : v < -0.004 ? "−" : "") + EUR2.format(Math.abs(v));
+
+  S.bk = { rel: null, curve: "dep", q: "", fcat: "", facc: "", scope: "", ask: null, confirmDel: null, busy: false, msg: null };
+  try { const v = localStorage.getItem("patrimoine-bk-curve"); if (v === "dep" || v === "solde") S.bk.curve = v; } catch (e) {}
+  try { const v = localStorage.getItem("patrimoine-bk-rel"); if (v) S.bk.rel = v; } catch (e) {}
+
+  const bankOf = (doc) => {
+    const b = doc && doc.banque && typeof doc.banque === "object" ? doc.banque : {};
+    return {
+      releves: Array.isArray(b.releves) ? b.releves : [],
+      ops: Array.isArray(b.ops) ? b.ops : [],
+      regles: b.regles && typeof b.regles === "object" && !Array.isArray(b.regles) ? b.regles : {},
+    };
+  };
+  let bkCache = { doc: undefined, m: null };
+  function bankModel() {
+    if (bkCache.m && bkCache.doc === S.doc) return bkCache.m;
+    const b = bankOf(S.doc);
+    const budget = budgetOf(S.doc) || {};
+    const info = RL ? RL.enrich(b.releves, b.ops) : new Map();
+    const { cat, how } = RL ? RL.classifyAll(b.ops, info, budget, b.regles) : { cat: new Map(), how: new Map() };
+    const lines = new Map();
+    (Array.isArray(budget.depenses) ? budget.depenses : []).forEach((l) => lines.set(l.id, { l, sens: "out" }));
+    (Array.isArray(budget.recettes) ? budget.recettes : []).forEach((l) => lines.set(l.id, { l, sens: "in" }));
+    const releves = b.releves.slice().sort((x, y) => (x.fin < y.fin ? -1 : x.fin > y.fin ? 1 : 0));
+    const m = { b, budget, info, cat, how, lines, releves };
+    bkCache = { doc: S.doc, m };
+    return m;
+  }
+  const catName = (m, c) => {
+    if (!c) return "—";
+    if (c.startsWith("b:")) { const x = m.lines.get(c.slice(2)); return x ? x.l.nom : "Ligne retirée"; }
+    const k = RL && RL.CAT[c.slice(2)];
+    return k ? k.nom : "—";
+  };
+  const catSide = (m, c) => {
+    if (!c) return "out";
+    if (c.startsWith("b:")) { const x = m.lines.get(c.slice(2)); return x ? x.sens : "out"; }
+    const k = RL && RL.CAT[c.slice(2)];
+    return k ? k.sens : "out";
+  };
+
+  /** Totaux d'un relevé : par classement, entrées, dépenses, mis de côté. */
+  function periodStats(m, relId) {
+    const ops = m.b.ops.filter((o) => o.rel === relId);
+    const per = new Map();
+    let inn = 0, out = 0, interneCourant = 0, hasCourant = false;
+    ops.forEach((o) => {
+      const c = m.cat.get(o.id);
+      const side = catSide(m, c);
+      if (side === "neutre") {
+        if (RL.isCourant(o.compteNom || "")) { interneCourant += o.montant; hasCourant = true; }
+        return;
+      }
+      const v = side === "out" ? -o.montant : o.montant;
+      if (side === "out") out += v; else inn += v;
+      const e = per.get(c) || { v: 0, n: 0 };
+      e.v += v; e.n += 1;
+      per.set(c, e);
+    });
+    let epargne = -interneCourant;
+    if (!hasCourant) epargne = ops.filter((o) => m.cat.get(o.id) === "c:interne").reduce((s, o) => s + o.montant, 0);
+    return { ops, per, inn, out, reste: inn - out, epargne };
+  }
+  function planTotals() {
+    const t = budgetTotals(S.doc);
+    return { has: !!t, inn: t ? t.recettes : 0, out: t ? t.depenses : 0, reste: t ? t.reste : 0, epargne: saving() };
+  }
+
+  /* --- PDF : lecture avec pdf.js, chargé seulement quand on ajoute un relevé --- */
+  let pdfLib = null;
+  const loadScript = (src) => new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error(src));
+    document.head.append(s);
+  });
+  async function loadPdfJs() {
+    if (pdfLib) return pdfLib;
+    // le moteur est chargé dans la page : la lecture marche aussi dans le programme Windows et l'app Android
+    if (!window.pdfjsWorker) await loadScript("vendor/pdfjs/pdf.worker.min.js");
+    if (!window.pdfjsLib) await loadScript("vendor/pdfjs/pdf.min.js");
+    pdfLib = window.pdfjsLib;
+    try { pdfLib.GlobalWorkerOptions.workerSrc = "vendor/pdfjs/pdf.worker.min.js"; } catch (e) {}
+    return pdfLib;
+  }
+  async function pdfPages(lib, bytes) {
+    const doc = await lib.getDocument({ data: bytes, isEvalSupported: false, disableFontFace: true, verbosity: 0 }).promise;
+    try {
+      const pages = [];
+      for (let p = 1; p <= doc.numPages; p++) {
+        const tc = await (await doc.getPage(p)).getTextContent();
+        pages.push(tc.items.filter((i) => i.str && i.str.trim()).map((i) => ({ s: i.str, x: i.transform[4], y: i.transform[5], w: i.width })));
+      }
+      return pages;
+    } finally { try { doc.destroy(); } catch (e) {} }
+  }
+
+  /* --- les fichiers PDF restent sur l'appareil (IndexedDB) --- */
+  const IDB = {
+    db: null,
+    open() {
+      if (this.db) return Promise.resolve(this.db);
+      return new Promise((res, rej) => {
+        let r;
+        try { r = indexedDB.open("patrimoine-docs", 1); } catch (e) { rej(e); return; }
+        r.onupgradeneeded = () => { r.result.createObjectStore("pdf"); };
+        r.onsuccess = () => { this.db = r.result; res(this.db); };
+        r.onerror = () => rej(r.error);
+      });
+    },
+    async run(mode, fn) {
+      const db = await this.open();
+      return new Promise((res, rej) => {
+        const t = db.transaction("pdf", mode);
+        const req = fn(t.objectStore("pdf"));
+        t.oncomplete = () => res(req ? req.result : undefined);
+        t.onerror = () => rej(t.error);
+        t.onabort = () => rej(t.error);
+      });
+    },
+    put(id, v) { return this.run("readwrite", (s) => s.put(v, id)); },
+    get(id) { return this.run("readonly", (s) => s.get(id)); },
+    del(id) { return this.run("readwrite", (s) => s.delete(id)); },
+  };
+
+  const sameAcct = (a, b) => {
+    const x = RL.flat(a).replace(/^C C /, ""), y = RL.flat(b).replace(/^C C /, "");
+    return !!x && !!y && (x === y || (x.length > 6 && y.length > 6 && (x.endsWith(" " + y) || y.endsWith(" " + x))));
+  };
+  const compteFor = (nom) => {
+    const c = ((S.doc && S.doc.comptes) || []).find((k) => sameAcct(nom, k.nom));
+    return c ? c.id : null;
+  };
+  /** Soldes de fin de relevé pour l'onglet Patrimoine (tous les comptes, sinon rien). */
+  function soldesFrom(r) {
+    const comptes = (S.doc && S.doc.comptes) || [];
+    if (!comptes.length) return null;
+    const out = {};
+    for (const c of comptes) {
+      const sec = r.comptes.find((x) => sameAcct(x.nom, c.nom) && x.soldeFin != null);
+      if (sec) { out[c.id] = sec.soldeFin; continue; }
+      const a = (r.autres || []).find((x) => sameAcct(x.nom, c.nom));
+      if (a) { out[c.id] = a.solde; continue; }
+      return null;
+    }
+    return out;
+  }
+
+  function setBkMsg(text, warn, actions) { S.bk.msg = text ? { text, warn: !!warn, actions: actions || null } : null; renderBkMsg(); }
+  function renderBkMsg() {
+    const box = $("bk-msg");
+    const msg = S.bk.msg;
+    box.hidden = !msg;
+    box.textContent = "";
+    if (!msg) return;
+    box.classList.toggle("warn", msg.warn);
+    box.append(el("span", {}, msg.text));
+    if (!S.bk.busy) {
+      const ok = el("button", { class: "btn btn-quiet", type: "button" }, "OK");
+      ok.addEventListener("click", () => setBkMsg(null));
+      box.append(ok);
+    }
+  }
+
+  async function importFiles(files) {
+    files = Array.from(files || []).filter((f) => f && /\.pdf$/i.test(f.name || "") || (f && f.type === "application/pdf"));
+    if (!files.length || S.bk.busy) return;
+    if (!RL) { setBkMsg("La lecture des relevés n'est pas disponible dans cette version de l'app.", true); return; }
+    S.bk.busy = true;
+    setBkMsg(files.length > 1 ? `Lecture de ${files.length} relevés…` : "Lecture du relevé…");
+    let lib;
+    try { lib = await loadPdfJs(); }
+    catch (e) { S.bk.busy = false; setBkMsg("Le lecteur de PDF n'a pas pu se charger. Fermez puis rouvrez l'app, et réessayez.", true); return; }
+    const b = bankOf(S.doc);
+    const releves = b.releves.slice(), ops = b.ops.slice();
+    const soldes = { ...((S.doc && S.doc.releves) || {}) };
+    const added = [], dup = [], bad = [], months = [];
+    for (const f of files) {
+      let buf, r;
+      try {
+        buf = await f.arrayBuffer();
+        r = RL.parseReleve(await pdfPages(lib, new Uint8Array(buf.slice(0))));
+      } catch (e) { bad.push(f.name); continue; }
+      const id = `${r.fin}-${String(r.principal || "").slice(-4)}`;
+      if (releves.some((x) => x.id === id)) { dup.push(periodChip(r)); continue; }
+      const rec = {
+        id, fichier: f.name, date: r.date, debut: r.debut, fin: r.fin, importe: todayIso(), titulaire: r.titulaire,
+        comptes: r.comptes.map((c) => ({ nom: c.nom, cle: compteFor(c.nom), debut: c.debut, fin: c.fin, soldeDebut: c.soldeDebut, soldeFin: c.soldeFin, verifie: c.verifie, n: c.ops.length })),
+        autres: r.autres, frais: r.frais, pdf: false,
+      };
+      r.comptes.forEach((c, ci) => c.ops.forEach((o, i) => {
+        const op = { id: `${id}:${ci}:${i}`, rel: id, compte: compteFor(c.nom) || c.nom, compteNom: c.nom, date: o.date, valeur: o.valeur, libelle: o.libelle, montant: o.montant };
+        if (o.detail) op.detail = o.detail;
+        ops.push(op);
+      }));
+      try { await IDB.put(id, { name: f.name, data: buf }); rec.pdf = true; } catch (e) { rec.pdf = false; }
+      releves.push(rec);
+      added.push(rec);
+      const so = soldesFrom(r);
+      const ym = r.fin.slice(0, 7);
+      if (so && (!soldes[ym] || soldes[ym].source === "releve")) { soldes[ym] = { soldes: so, date: r.fin, source: "releve" }; months.push(ym); }
+    }
+    S.bk.busy = false;
+    if (added.length) {
+      added.sort((x, y) => (x.fin < y.fin ? -1 : 1));
+      S.bk.rel = added[added.length - 1].id;
+      try { localStorage.setItem("patrimoine-bk-rel", S.bk.rel); } catch (e) {}
+      const ok = await saveBank({ ...b, releves, ops }, months.length ? { releves: soldes } : null);
+      if (!ok) return;
+    }
+    const parts = [];
+    if (added.length) parts.push(added.length > 1 ? `${added.length} relevés ajoutés.` : `Relevé ajouté (${periodChip(added[0])}).`);
+    if (added.some((r) => r.comptes.some((c) => !c.verifie))) parts.push("Attention : sur un relevé, les totaux ne tombent pas juste, certaines lignes ont pu être mal lues.");
+    if (months.length) parts.push(`Soldes repris dans Patrimoine : ${months.sort().map(monthLong).join(", ")}.`);
+    if (dup.length) parts.push(`${dup.length > 1 ? "Déjà présents" : "Déjà présent"} : ${dup.join(", ")}.`);
+    if (bad.length) parts.push(`Pas lu : ${bad.join(", ")}. Ce n'est pas un relevé de compte du Crédit Mutuel, ou le fichier est abîmé.`);
+    setBkMsg(parts.join(" "), !added.length || bad.length > 0);
+  }
+
+  async function saveBank(nextBank, extra) {
+    const next = { ...(S.doc || {}), ...(extra || {}), banque: nextBank };
+    try {
+      if (S.dbRef) await S.dbRef.set(next);
+      S.doc = next;
+      S.loaded = true;
+    } catch (e) {
+      setBkMsg(e && e.code === "invalid_argument" ? "Vous ne pouvez pas modifier ces données depuis cet affichage." : "L'enregistrement n'a pas abouti. Réessayez.", true);
+      return false;
+    }
+    render();
+    return true;
+  }
+
+  async function setOpCat(id, value) {
+    const m = bankModel(), b = m.b;
+    if (!b.ops.some((o) => o.id === id)) return;
+    const key = m.info.get(id).d.key;
+    const regles = { ...b.regles };
+    const ops = b.ops.map((o) => (o.id === id ? { ...o } : o));
+    const me = ops.find((o) => o.id === id);
+    S.bk.ask = null;
+    if (value === "auto") {
+      delete me.cat;
+      delete regles[key];
+    } else {
+      const others = b.ops.filter((o) => o.id !== id && m.info.get(o.id).d.key === key);
+      const toChange = others.filter((o) => m.how.get(o.id) !== "manuel" && m.cat.get(o.id) !== value);
+      if (toChange.length) {
+        me.cat = value;
+        S.bk.ask = { key, value, n: toChange.length, nom: RL.joli(m.info.get(id).d.tiers) };
+      } else {
+        // retenu pour ce commerçant : les prochains relevés seront classés pareil
+        regles[key] = value;
+        delete me.cat;
+      }
+    }
+    await saveBank({ ...b, ops, regles });
+  }
+  async function answerAsk(all) {
+    const a = S.bk.ask;
+    S.bk.ask = null;
+    if (!a || !all) { renderBkOps(bankModel()); return; }
+    const m = bankModel(), b = m.b;
+    const ops = b.ops.map((o) => {
+      if (o.cat === a.value && m.info.get(o.id).d.key === a.key) { const c = { ...o }; delete c.cat; return c; }
+      return o;
+    });
+    await saveBank({ ...b, ops, regles: { ...b.regles, [a.key]: a.value } });
+  }
+
+  async function removeReleve(id) {
+    const b = bankOf(S.doc);
+    S.bk.confirmDel = null;
+    if (S.bk.rel === id) S.bk.rel = null;
+    try { await IDB.del(id); } catch (e) {}
+    await saveBank({ ...b, releves: b.releves.filter((r) => r.id !== id), ops: b.ops.filter((o) => o.rel !== id) });
+  }
+
+  async function openPdf(rel) {
+    let rec = null;
+    try { rec = await IDB.get(rel.id); } catch (e) {}
+    if (!rec || !rec.data) { setBkMsg("Le fichier PDF de ce relevé n'est pas sur cet appareil.", true); return; }
+    const name = rec.name || `releve-${rel.fin}.pdf`;
+    const Cap = window.Capacitor;
+    try {
+      if (window.patrimoineDesktop && window.patrimoineDesktop.openPdf) {
+        const err = await window.patrimoineDesktop.openPdf(name, new Uint8Array(rec.data));
+        if (err) setBkMsg("Windows n'a pas trouvé de programme pour ouvrir les PDF.", true);
+        return;
+      }
+      if (Cap && typeof Cap.isNativePlatform === "function" && Cap.isNativePlatform()) {
+        const plug = (n) => (typeof Cap.registerPlugin === "function" ? Cap.registerPlugin(n) : Cap.Plugins[n]);
+        const bytes = new Uint8Array(rec.data);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        const w = await plug("Filesystem").writeFile({ path: name.replace(/[^\w.\- ]+/g, "_"), data: btoa(bin), directory: "CACHE" });
+        await plug("Share").share({ title: name, files: [w.uri], dialogTitle: "Ouvrir le relevé" });
+        return;
+      }
+    } catch (e) {
+      if (!/cancel/i.test(String(e && e.message))) setBkMsg("Le relevé n'a pas pu s'ouvrir.", true);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([rec.data], { type: "application/pdf" }));
+    const w = window.open(url, "_blank");
+    if (!w) {
+      const a = el("a", { href: url, download: name });
+      document.body.append(a); a.click(); a.remove();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 120000);
+  }
+
+  /* --- affichage --- */
+  function renderBank() {
+    const m = bankModel();
+    const rels = m.releves;
+    $("bk-empty").hidden = rels.length > 0;
+    $("bk-top").hidden = rels.length === 0;
+    $("bk-main").hidden = rels.length === 0;
+    renderBkMsg();
+    if (!rels.length) return;
+    let rel = rels.find((r) => r.id === S.bk.rel);
+    if (!rel) rel = rels[rels.length - 1];
+    S.bk.rel = rel.id;
+    renderBkPeriods(m, rel);
+    if ($("tab-banque").hidden) { renderBkOps(m); renderBkDocs(m); return; }
+    const st = periodStats(m, rel.id);
+    const plan = planTotals();
+    renderBkFigures(st, plan);
+    renderBkSummary(m, st, plan, rel);
+    renderBkLines(m, st);
+    renderBkCurve(m, st, plan, rel);
+    renderBkEvo(m, plan, rel);
+    renderBkOps(m);
+    renderBkDocs(m);
+  }
+  function selectPeriod(id) {
+    S.bk.rel = id;
+    S.bk.ask = null;
+    try { localStorage.setItem("patrimoine-bk-rel", id); } catch (e) {}
+    renderBank();
+  }
+  function renderBkPeriods(m, rel) {
+    const box = $("bk-periods");
+    box.textContent = "";
+    m.releves.slice().reverse().forEach((r) => {
+      const b = el("button", { type: "button", class: "chip-btn", "aria-pressed": String(r.id === rel.id) }, periodChip(r));
+      b.addEventListener("click", () => selectPeriod(r.id));
+      box.append(b);
+    });
+    $("bk-title").textContent = periodLabel(rel);
+  }
+
+  /** ▲ / ▼ avec des mots : jamais la couleur seule. */
+  function deltaEl(real, plan, higherIsGood) {
+    const d = real - plan;
+    if (Math.abs(d) < 0.5) return el("span", { class: "delta" }, "comme prévu");
+    const good = higherIsGood ? d > 0 : d < 0;
+    return el("span", { class: `delta ${good ? "good" : "bad"}` }, `${d > 0 ? "▲" : "▼"} ${EUR2.format(Math.abs(d))} de ${d > 0 ? "plus" : "moins"}`);
+  }
+  function renderBkFigures(st, plan) {
+    const fill = (id, value, planV, higherIsGood, fmt) => {
+      $(id).textContent = fmt(value);
+      const sub = $(id + "-sub");
+      sub.textContent = "";
+      if (!plan.has) { sub.append("Remplissez « Mes dépenses » pour comparer"); return; }
+      sub.append(`prévu ${fmt(planV)} · `, deltaEl(value, planV, higherIsGood));
+    };
+    fill("bk-in", st.inn, plan.inn, true, money);
+    fill("bk-out", st.out, plan.out, false, money);
+    fill("bk-rest", st.reste, plan.reste, true, signed);
+    $("bk-rest").classList.toggle("neg", st.reste < -0.004);
+    $("bk-save").textContent = signed(st.epargne);
+    const ss = $("bk-save-sub");
+    ss.textContent = "";
+    ss.append(st.epargne < -0.004 ? "repris sur mes livrets · " : "vers mes livrets · ", `prévu ${EUR0.format(plan.epargne)}`);
+  }
+
+  function renderBkSummary(m, st, plan, rel) {
+    const p = $("bk-sentence");
+    p.textContent = "";
+    const B = (t) => el("b", {}, t);
+    p.append(`${periodLabel(rel)}, il est rentré `, B(money(st.inn)));
+    if (plan.has) p.append(` (${money(plan.inn)} prévus)`);
+    p.append(" et tu as dépensé ", B(money(st.out)));
+    if (plan.has) p.append(` pour ${money(plan.out)} prévus`);
+    p.append(". ");
+    if (plan.has) {
+      p.append("Au final : ", B(signed(st.reste)), `, alors que le plan prévoyait ${signed(plan.reste)}. `);
+    } else p.append("Au final : ", B(signed(st.reste)), ". ");
+    if (st.epargne < -0.004) p.append("Tu as repris ", B(money(-st.epargne)), ` sur tes livrets au lieu d'y mettre ${EUR0.format(plan.epargne)}.`);
+    else if (st.epargne > 0.004) p.append("Tu as mis ", B(money(st.epargne)), ` de côté sur tes livrets, pour ${EUR0.format(plan.epargne)} prévus.`);
+    else p.append(`Rien n'est allé sur tes livrets, pour ${EUR0.format(plan.epargne)} prévus.`);
+
+    const box = $("bk-alerts");
+    box.textContent = "";
+    const alert = (kind, icon, nodes, action) => {
+      const d = el("div", { class: `alert ${kind}` });
+      d.append(el("span", { class: "ic", "aria-hidden": "true" }, icon));
+      const t = el("div");
+      t.append(...nodes);
+      if (action) { const b = el("button", { class: "btn btn-quiet", type: "button" }, action[0]); b.addEventListener("click", action[1]); t.append(" ", b); }
+      d.append(t);
+      box.append(d);
+    };
+    // plus gros écarts
+    const over = [];
+    m.lines.forEach(({ l, sens }) => {
+      if (sens !== "out") return;
+      const e = st.per.get("b:" + l.id);
+      const d = (e ? e.v : 0) - (Number(l.montant) || 0);
+      if (d > 0.5) over.push({ c: "b:" + l.id, nom: l.nom, d, txt: `+${EUR0.format(d)}` });
+    });
+    st.per.forEach((e, c) => { if (c.startsWith("c:") && catSide(m, c) === "out" && e.v > 0.5 && c !== "c:incidents") over.push({ c, nom: catName(m, c), d: e.v, txt: `${EUR0.format(e.v)} hors budget` }); });
+    over.sort((a, b) => b.d - a.d);
+    if (over.length) {
+      const nodes = ["Ce qui a le plus dépassé : "];
+      over.slice(0, 4).forEach((o, i) => {
+        if (i) nodes.push(i === Math.min(4, over.length) - 1 ? " et " : ", ");
+        const b = el("button", { class: "link", type: "button" }, o.nom);
+        b.addEventListener("click", () => showCat(o.c));
+        nodes.push(b, ` (${o.txt})`);
+      });
+      nodes.push(".");
+      alert("info", "↗", nodes);
+    }
+    const inc = st.ops.filter((o) => m.cat.get(o.id) === "c:incidents");
+    const incV = inc.reduce((s, o) => s - o.montant, 0);
+    const rej = st.ops.filter((o) => m.info.get(o.id).d.type === "impaye");
+    if (incV > 0.004 || rej.length) {
+      const nodes = [];
+      if (incV > 0.004) nodes.push(el("b", {}, `${EUR2.format(incV)} de frais d'incident`), ` (${inc.length} frais). `);
+      if (rej.length) nodes.push(`${rej.length} prélèvement${rej.length > 1 ? "s rejetés" : " rejeté"} faute d'argent sur le compte. `);
+      nodes.push("La banque facture ces frais quand le compte courant est trop juste au moment d'un paiement : garder une petite marge les évite.");
+      alert("warn", "⚠", nodes, incV > 0.004 ? ["Voir ces frais", () => showCat("c:incidents")] : null);
+    }
+    const autres = st.ops.filter((o) => m.cat.get(o.id) === "c:autres-dep" || m.cat.get(o.id) === "c:autres-ent");
+    if (autres.length) {
+      alert("info", "?", [`${autres.length} opération${autres.length > 1 ? "s" : ""} pas reconnue${autres.length > 1 ? "s" : ""} (« Autres »). Classez-les une fois : l'app s'en souviendra pour les prochains relevés.`],
+        ["Les voir", () => showCat(autres.every((o) => m.cat.get(o.id) === "c:autres-ent") ? "c:autres-ent" : "c:autres-dep")]);
+    }
+    if (rel.comptes.some((c) => !c.verifie)) alert("warn", "⚠", ["Sur ce relevé, solde de départ + opérations ne donnent pas le solde de fin : une ligne a pu être mal lue. Comparez avec le PDF."]);
+  }
+  function showCat(c) {
+    S.bk.fcat = c;
+    S.bk.scope = "";
+    S.bk.q = "";
+    $("bk-q").value = "";
+    renderBkOps(bankModel());
+    const card = $("bk-ops-card");
+    try { card.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (e) { card.scrollIntoView(); }
+  }
+
+  function renderBkLines(m, st) {
+    const box = $("bk-lines");
+    box.textContent = "";
+    const get = (c) => st.per.get(c) || { v: 0, n: 0 };
+    const hors = (side) => [...st.per].filter(([c, e]) => c.startsWith("c:") && catSide(m, c) === side && Math.abs(e.v) > 0.004)
+      .sort((a, b) => b[1].v - a[1].v).map(([c]) => ({ c, nom: catName(m, c), plan: null }));
+    const lineItems = (arr) => (Array.isArray(arr) ? arr : []).map((l) => ({ c: "b:" + l.id, nom: l.nom, plan: Number(l.montant) || 0 }));
+    const groups = [
+      { title: "Ce qui rentre", sens: "in", items: [...lineItems(m.budget.recettes), ...hors("in")] },
+      { title: "Mes dépenses prévues", sens: "out", items: lineItems(m.budget.depenses) },
+      { title: "Hors budget", sens: "out", items: hors("out"), hors: true },
+    ].filter((g) => g.items.length);
+    let scale = 1;
+    groups.forEach((g) => g.items.forEach((it) => { scale = Math.max(scale, it.plan || 0, get(it.c).v); }));
+    if (!groups.length) { box.append(el("p", { class: "muted" }, "Aucune opération sur ce relevé.")); return; }
+    groups.forEach((g) => {
+      const grp = el("div", { class: "pr-group" });
+      const head = el("div", { class: "pr-head" });
+      const real = g.items.reduce((s, it) => s + get(it.c).v, 0);
+      const planT = g.items.reduce((s, it) => s + (it.plan || 0), 0);
+      head.append(el("h3", {}, g.title));
+      const tot = el("span", { class: "pr-tot" });
+      tot.append(el("b", { class: "num" }, money(real)));
+      if (!g.hors) tot.append(el("span", { class: "muted num" }, ` / ${money(planT)} prévus`));
+      head.append(tot);
+      grp.append(head);
+      g.items.forEach((it) => {
+        const e = get(it.c);
+        const row = el("button", { type: "button", class: "pr-row", "aria-label": `${it.nom} : ${money(e.v)}${it.plan != null ? ` pour ${money(it.plan)} prévus` : " hors budget"}. Voir les opérations.` });
+        row.append(el("span", { class: "pr-name" }, it.nom));
+        const vals = el("span", { class: "pr-vals" });
+        vals.append(el("b", { class: "num" }, money(e.v)));
+        if (it.plan != null) vals.append(el("span", { class: "muted num" }, ` / ${money(it.plan)}`));
+        row.append(vals);
+        row.append(el("span", { class: "pr-sub" }, e.n ? `${e.n} opération${e.n > 1 ? "s" : ""}${it.plan == null ? " · pas prévu" : ""}` : "aucune opération"));
+        const dl = el("span", { class: "pr-delta" });
+        if (it.plan != null) dl.append(deltaEl(e.v, it.plan, g.sens === "in"));
+        row.append(dl);
+        const bar = el("span", { class: `pr-bar ${g.sens}`, "aria-hidden": "true" });
+        const fillI = el("i");
+        fillI.style.width = `${Math.max(0, Math.min(100, (e.v / scale) * 100)).toFixed(2)}%`;
+        bar.append(fillI);
+        if (it.plan != null) { const t = el("s"); t.style.left = `${Math.min(100, (it.plan / scale) * 100).toFixed(2)}%`; bar.append(t); }
+        row.append(bar);
+        row.addEventListener("click", () => showCat(it.c));
+        grp.append(row);
+      });
+      box.append(grp);
+    });
+  }
+
+  /* --- graphiques --- */
+  function chartBox(box) {
+    box.querySelectorAll("svg, .tip, .empty").forEach((n) => n.remove());
+    const W = Math.max(280, box.clientWidth || 600);
+    return { W, narrow: W < 560 };
+  }
+  function placeTip(box, tip, W, px, py) {
+    tip.hidden = false;
+    const bw = box.clientWidth, tw = tip.offsetWidth, th = tip.offsetHeight;
+    const scale = bw / W;
+    let left = px * scale + 14;
+    if (left + tw > bw) left = px * scale - tw - 14;
+    left = Math.max(0, left);
+    const top = Math.max(0, Math.min(py * scale - th / 2, box.clientHeight - th));
+    tip.style.transform = `translate(${left}px, ${top}px)`;
+  }
+  const tipRow = (label, value, cls) => {
+    const d = el("div", { class: "row" });
+    const k = el("span", { class: "k" });
+    k.append(el("i", { class: cls || "" }), label);
+    d.append(k, el("span", { class: "num" }, value));
+    return d;
+  };
+
+  /** Courbes sur les jours d'un relevé, avec repère au survol. */
+  function bkLineChart(box, o) {
+    const { W, narrow } = chartBox(box);
+    const H = narrow ? 230 : 290;
+    const mg = { t: 16, r: narrow ? 12 : 18, b: 28, l: narrow ? 62 : 72 };
+    const iw = W - mg.l - mg.r, ih = H - mg.t - mg.b;
+    const all = o.series.flatMap((s) => s.vals);
+    let lo = Math.min(0, ...all), hi = Math.max(0, ...all);
+    if (hi - lo < 1) hi = lo + 1;
+    const step = niceStep(hi - lo, narrow ? 4 : 5);
+    lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+    const n = o.n;
+    const x = (i) => mg.l + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
+    const y = (v) => mg.t + ih - ((v - lo) / (hi - lo)) * ih;
+    const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", tabindex: "0", role: "img", "aria-label": o.aria });
+    if (o.negBand && lo < 0) {
+      svg.append(sv("rect", { class: "neg-band", x: mg.l, y: y(0), width: iw, height: y(lo) - y(0) }));
+      svg.append(sv("text", { class: "neg-label", x: mg.l + 6, y: y(lo) - 6 }, "À découvert"));
+    }
+    const g = sv("g", { class: "grid" }), ax = sv("g", { class: "axis" });
+    for (let v = lo; v <= hi + 1e-9; v += step) {
+      g.append(sv("line", { x1: mg.l, x2: W - mg.r, y1: y(v), y2: y(v) }));
+      ax.append(sv("text", { x: mg.l - 8, y: y(v) + 4, "text-anchor": "end" }, EUR0.format(v).replace("-", "−")));
+    }
+    svg.append(g);
+    svg.append(sv("line", { class: lo < 0 ? "zero" : "baseline", x1: mg.l, x2: W - mg.r, y1: y(0), y2: y(0) }));
+    const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(iw / 70))));
+    for (let i = 0; i < n; i += every) ax.append(sv("text", { x: x(i), y: H - 8, "text-anchor": i === 0 ? "start" : "middle" }, o.tick(i)));
+    svg.append(ax);
+    o.series.forEach((s) => {
+      svg.append(sv("path", { class: `line ${s.cls}`, d: s.vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("") }));
+    });
+    const main = o.series[0];
+    const lv = main.vals[n - 1];
+    svg.append(sv("circle", { class: `end-dot ${main.cls}`, cx: x(n - 1), cy: y(lv), r: 4.5 }));
+    const lab = sv("text", { class: "end-label", x: x(n - 1) - 8, y: Math.max(mg.t + 12, y(lv) - 10), "text-anchor": "end" });
+    lab.append(sv("tspan", { class: "v" }, money(lv)));
+    svg.append(lab);
+    const cross = sv("line", { class: "cross", y1: mg.t, y2: mg.t + ih, visibility: "hidden" });
+    const dots = o.series.map((s) => sv("circle", { class: `hover-dot ${s.cls}`, r: 5, visibility: "hidden" }));
+    svg.append(cross, ...dots);
+    box.append(svg);
+    const tip = el("div", { class: "tip", hidden: "" });
+    box.append(tip);
+    let cur = -1;
+    const show = (i) => {
+      cur = i;
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+      o.series.forEach((s, k) => { dots[k].setAttribute("cx", x(i)); dots[k].setAttribute("cy", y(s.vals[i])); dots[k].setAttribute("visibility", "visible"); });
+      tip.textContent = "";
+      tip.append(el("h3", {}, o.title(i)));
+      o.series.forEach((s) => tip.append(tipRow(s.name, money(s.vals[i]), s.cls)));
+      if (o.extra) { const ex = o.extra(i); if (ex) tip.append(ex); }
+      placeTip(box, tip, W, x(i), y(Math.max(...o.series.map((s) => s.vals[i]))));
+    };
+    const hide = () => { cur = -1; tip.hidden = true; cross.setAttribute("visibility", "hidden"); dots.forEach((d) => d.setAttribute("visibility", "hidden")); };
+    const at = (ev) => { const r = svg.getBoundingClientRect(); const px = ((ev.clientX - r.left) / r.width) * W; return Math.max(0, Math.min(n - 1, Math.round(((px - mg.l) / iw) * (n - 1)))); };
+    svg.addEventListener("pointermove", (ev) => show(at(ev)));
+    svg.addEventListener("pointerdown", (ev) => show(at(ev)));
+    svg.addEventListener("pointerleave", hide);
+    svg.addEventListener("blur", hide);
+    svg.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") { ev.preventDefault(); show(Math.max(0, Math.min(n - 1, (cur < 0 ? 0 : cur) + (ev.key === "ArrowRight" ? 1 : -1)))); }
+      else if (ev.key === "Escape") hide();
+    });
+  }
+
+  function renderBkCurve(m, st, plan, rel) {
+    document.querySelectorAll("[data-bkcurve]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.bkcurve === S.bk.curve)));
+    const box = $("bk-curve"), legend = $("bk-curve-legend");
+    const d0 = dayIdx(rel.debut), d1 = Math.max(dayIdx(rel.fin), d0 + 1);
+    const n = d1 - d0 + 1;
+    const when = (o) => {
+      let t = dayIdx(o.date);
+      if (t < d0 || t > d1) { const v = dayIdx(o.valeur); t = v >= d0 && v <= d1 ? v : Math.min(d1, Math.max(d0, t)); }
+      return t - d0;
+    };
+    const day = (i) => isoOfDay(d0 + i);
+    const opsOn = (pred) => { const a = Array.from({ length: n }, () => []); st.ops.forEach((o) => { if (pred(o)) a[when(o)].push(o); }); return a; };
+    const dayList = (list, sign) => {
+      if (!list.length) return null;
+      const box2 = el("div", { class: "parts" });
+      list.slice().sort((a, b) => Math.abs(b.montant) - Math.abs(a.montant)).slice(0, 4).forEach((o) => {
+        const d = el("div", { class: "row" });
+        d.append(el("span", {}, RL.joli(m.info.get(o.id).d.tiers)), el("span", { class: "num" }, sign ? signed(o.montant) : money(-o.montant)));
+        box2.append(d);
+      });
+      if (list.length > 4) box2.append(el("div", { class: "tag" }, `et ${list.length - 4} autre${list.length - 4 > 1 ? "s" : ""}`));
+      return box2;
+    };
+    legend.textContent = "";
+    if (S.bk.curve === "dep") {
+      $("bk-curve-title").textContent = "Mes dépenses jour après jour";
+      const per = opsOn((o) => catSide(m, m.cat.get(o.id)) === "out");
+      const cum = [];
+      per.forEach((list, i) => { cum.push((i ? cum[i - 1] : 0) + list.reduce((s, o) => s - o.montant, 0)); });
+      const series = [{ name: "Dépensé", cls: "dep", vals: cum }];
+      if (plan.has) series.push({ name: "Rythme prévu", cls: "plan", vals: cum.map((v, i) => (plan.out * i) / (n - 1)) });
+      const l1 = el("span"); l1.append(el("i", { class: "sw dep" }), "Dépensé depuis le début du relevé");
+      legend.append(l1);
+      if (plan.has) { const l2 = el("span"); l2.append(el("i", { class: "sw plan" }), `Rythme prévu (${EUR0.format(plan.out)} sur le relevé)`); legend.append(l2); }
+      bkLineChart(box, {
+        n, series, tick: (i) => dShort(day(i)),
+        title: (i) => dateLong(day(i)),
+        extra: (i) => dayList(per[i], false),
+        aria: `Dépenses cumulées ${periodLabel(rel).toLowerCase()} : ${money(cum[n - 1])}${plan.has ? ` pour ${money(plan.out)} prévus` : ""}.`,
+      });
+    } else {
+      const acc = rel.comptes.find((c) => RL.isCourant(c.nom)) || rel.comptes[0];
+      $("bk-curve-title").textContent = `Mon compte courant jour après jour`;
+      const per = opsOn((o) => o.compteNom === acc.nom);
+      const vals = [];
+      per.forEach((list, i) => { vals.push((i ? vals[i - 1] : Number(acc.soldeDebut) || 0) + list.reduce((s, o) => s + o.montant, 0)); });
+      const l1 = el("span"); l1.append(el("i", { class: "sw solde" }), `Solde de ${RL.joli(acc.nom)} en fin de journée`);
+      legend.append(l1);
+      const minV = Math.min(...vals);
+      if (minV < 0) { const l2 = el("span"); l2.append(el("i", { class: "box neg" }), "À découvert"); legend.append(l2); }
+      bkLineChart(box, {
+        n, series: [{ name: "Solde", cls: "solde", vals }], negBand: true, tick: (i) => dShort(day(i)),
+        title: (i) => dateLong(day(i)),
+        extra: (i) => dayList(per[i], true),
+        aria: `Solde du compte courant ${periodLabel(rel).toLowerCase()} : de ${money(vals[0])} à ${money(vals[n - 1])}, au plus bas ${money(minV)}.`,
+      });
+    }
+  }
+
+  function renderBkEvo(m, plan, rel) {
+    const box = $("bk-evo");
+    const { W, narrow } = chartBox(box);
+    const rels = m.releves;
+    const stats = rels.map((r) => periodStats(m, r.id));
+    const H = narrow ? 230 : 280;
+    const mg = { t: 18, r: narrow ? 10 : 16, b: 30, l: narrow ? 56 : 66 };
+    const iw = W - mg.l - mg.r, ih = H - mg.t - mg.b;
+    const maxV = Math.max(1, ...stats.map((s) => Math.max(s.inn, s.out)), plan.has ? plan.out : 0);
+    const step = niceStep(maxV, narrow ? 4 : 5);
+    const top = Math.ceil(maxV / step) * step;
+    const n = rels.length;
+    const gw = iw / Math.max(n, 1);
+    const bw = Math.min(34, Math.max(6, (gw - 14) / 2));
+    const y = (v) => mg.t + ih - (Math.max(0, v) / top) * ih;
+    const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img", tabindex: "0",
+      "aria-label": `Entrées et dépenses de ${n} relevé${n > 1 ? "s" : ""}. ` + rels.map((r, i) => `${periodChip(r)} : ${money(stats[i].inn)} rentrés, ${money(stats[i].out)} dépensés`).join(" ; ") });
+    rels.forEach((r, i) => { if (r.id === rel.id) svg.append(sv("rect", { class: "sel-band", x: mg.l + i * gw + 2, y: mg.t - 6, width: gw - 4, height: ih + 6, rx: 6 })); });
+    const g = sv("g", { class: "grid" }), ax = sv("g", { class: "axis" });
+    for (let v = 0; v <= top + 1e-9; v += step) {
+      g.append(sv("line", { x1: mg.l, x2: W - mg.r, y1: y(v), y2: y(v) }));
+      ax.append(sv("text", { x: mg.l - 8, y: y(v) + 4, "text-anchor": "end" }, EUR0.format(v)));
+    }
+    svg.append(g);
+    const bar = (cls, x0, v) => {
+      const h = y(0) - y(v);
+      if (h <= 0.5) return sv("rect", { class: `bar ${cls}`, x: x0, y: y(0) - 1, width: bw, height: 1 });
+      const r = Math.min(4, bw / 2, h);
+      const yt = y(v);
+      return sv("path", { class: `bar ${cls}`, d: `M${x0},${y(0)}V${yt + r}Q${x0},${yt} ${x0 + r},${yt}H${x0 + bw - r}Q${x0 + bw},${yt} ${x0 + bw},${yt + r}V${y(0)}Z` });
+    };
+    const lblW = narrow ? 44 : 76;
+    const lblEvery = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(iw / lblW))));
+    const lbl = (r) => { const p = dParts(r.fin); return narrow && p ? MOIS_COURT[p.m - 1] : dShort(r.fin); };
+    rels.forEach((r, i) => {
+      const cx = mg.l + i * gw + gw / 2;
+      svg.append(bar("in", cx - bw - 1, stats[i].inn), bar("out", cx + 1, stats[i].out));
+      if ((n - 1 - i) % lblEvery === 0) ax.append(sv("text", { x: cx, y: H - 10, "text-anchor": "middle" }, lbl(r)));
+    });
+    svg.append(sv("line", { class: "baseline", x1: mg.l, x2: W - mg.r, y1: y(0), y2: y(0) }));
+    if (plan.has && plan.out > 0) {
+      svg.append(sv("line", { class: "ref", x1: mg.l, x2: W - mg.r, y1: y(plan.out), y2: y(plan.out) }));
+      svg.append(sv("text", { class: "ref-label", x: mg.l + 4, y: y(plan.out) - 6, "text-anchor": "start" }, `Prévu ${EUR0.format(plan.out)}`));
+    }
+    svg.append(ax);
+    const hit = sv("g");
+    rels.forEach((r, i) => {
+      const h = sv("rect", { x: mg.l + i * gw, y: mg.t, width: gw, height: ih, fill: "transparent", "data-i": i, style: "cursor:pointer" });
+      hit.append(h);
+    });
+    svg.append(hit);
+    box.append(svg);
+    const tip = el("div", { class: "tip", hidden: "" });
+    box.append(tip);
+    const show = (i) => {
+      const s = stats[i];
+      tip.textContent = "";
+      tip.append(el("h3", {}, periodChip(rels[i])));
+      tip.append(tipRow("Rentré", money(s.inn), "in"), tipRow("Dépensé", money(s.out), "out"));
+      const p = el("div", { class: "parts" });
+      const r1 = el("div", { class: "row" }); r1.append(el("span", {}, "Reste"), el("span", { class: "num" }, signed(s.reste)));
+      const r2 = el("div", { class: "row" }); r2.append(el("span", {}, "Mis de côté"), el("span", { class: "num" }, signed(s.epargne)));
+      p.append(r1, r2, el("div", { class: "tag" }, "Touchez pour afficher ce relevé"));
+      tip.append(p);
+      placeTip(box, tip, W, mg.l + i * gw + gw / 2, y(Math.max(s.inn, s.out)));
+    };
+    hit.addEventListener("pointermove", (ev) => { const i = Number(ev.target.getAttribute("data-i")); if (i >= 0) show(i); });
+    hit.addEventListener("click", (ev) => { const i = Number(ev.target.getAttribute("data-i")); if (i >= 0 && rels[i]) selectPeriod(rels[i].id); });
+    svg.addEventListener("pointerleave", () => { tip.hidden = true; });
+    // tableau
+    const t = $("bk-evo-table");
+    t.textContent = "";
+    const head = el("tr");
+    ["Relevé", "Rentré", "Dépensé", "Reste", "Mis de côté"].forEach((h, i) => head.append(el("th", i ? { class: "r" } : {}, h)));
+    const thead = el("thead"); thead.append(head);
+    const tb = el("tbody");
+    rels.slice().reverse().forEach((r) => {
+      const s = stats[rels.indexOf(r)];
+      const tr = el("tr", r.id === rel.id ? { class: "hl" } : {});
+      tr.append(el("td", {}, periodChip(r)), el("td", { class: "r num" }, money(s.inn)), el("td", { class: "r num" }, money(s.out)),
+        el("td", { class: "r num" }, signed(s.reste)), el("td", { class: "r num" }, signed(s.epargne)));
+      tb.append(tr);
+    });
+    if (plan.has) {
+      const tr = el("tr", { class: "total" });
+      tr.append(el("td", {}, "Prévu chaque mois"), el("td", { class: "r num" }, money(plan.inn)), el("td", { class: "r num" }, money(plan.out)),
+        el("td", { class: "r num" }, signed(plan.reste)), el("td", { class: "r num" }, signed(plan.epargne)));
+      tb.append(tr);
+    }
+    t.append(thead, tb);
+  }
+
+  /* --- liste des opérations --- */
+  function catSelect(m) {
+    const s = el("select", { class: "op-cat" });
+    const group = (label, items) => {
+      if (!items.length) return;
+      const og = el("optgroup", { label });
+      items.forEach(([v, t]) => og.append(el("option", { value: v }, t)));
+      s.append(og);
+    };
+    group("Mon budget : ce qui rentre", (m.budget.recettes || []).map((l) => ["b:" + l.id, l.nom]));
+    group("Mon budget : mes dépenses", (m.budget.depenses || []).map((l) => ["b:" + l.id, l.nom]));
+    group("Hors budget : dépenses", RL.CATS.filter((c) => c.sens === "out").map((c) => ["c:" + c.id, c.nom]));
+    group("Hors budget : rentrées", RL.CATS.filter((c) => c.sens === "in").map((c) => ["c:" + c.id, c.nom]));
+    group("Ni dépense ni rentrée", [["c:interne", "Entre mes comptes (épargne)"]]);
+    return s;
+  }
+  function renderBkOps(m) {
+    const rels = m.releves;
+    const rel = rels.find((r) => r.id === S.bk.rel) || rels[rels.length - 1];
+    const box = $("bk-ops");
+    box.textContent = "";
+    if (!rel) return;
+    // filtres
+    const fcat = $("bk-fcat");
+    const used = new Set(m.b.ops.map((o) => m.cat.get(o.id)));
+    if (S.bk.fcat) used.add(S.bk.fcat);
+    fcat.textContent = "";
+    fcat.append(el("option", { value: "" }, "Tous les classements"));
+    [...used].map((c) => [c, catName(m, c)]).sort((a, b) => a[1].localeCompare(b[1], "fr")).forEach(([c, t]) => fcat.append(el("option", { value: c }, t)));
+    fcat.value = S.bk.fcat;
+    const facc = $("bk-facc");
+    const accs = [...new Set(m.b.ops.map((o) => o.compteNom))];
+    facc.textContent = "";
+    facc.append(el("option", { value: "" }, "Tous les comptes"));
+    accs.forEach((a) => facc.append(el("option", { value: a }, RL.joli(a))));
+    facc.value = accs.includes(S.bk.facc) ? S.bk.facc : "";
+    facc.hidden = accs.length < 2;
+    $("bk-fscope").value = S.bk.scope;
+    if (document.activeElement !== $("bk-q")) $("bk-q").value = S.bk.q;
+    // question en attente
+    const ask = $("bk-ask");
+    ask.textContent = "";
+    ask.hidden = !S.bk.ask;
+    if (S.bk.ask) {
+      const a = S.bk.ask;
+      ask.append(`Classer aussi ${a.n > 1 ? `les ${a.n} autres opérations` : "l'autre opération"} « ${a.nom} » dans « ${catName(m, a.value)} » ? Les prochains relevés seront classés pareil.`);
+      const yes = el("button", { class: "btn btn-primary", type: "button" }, "Oui, toutes");
+      yes.addEventListener("click", () => answerAsk(true));
+      const no = el("button", { class: "btn btn-quiet", type: "button" }, "Non, seulement celle-ci");
+      no.addEventListener("click", () => answerAsk(false));
+      ask.append(" ", yes, " ", no);
+    }
+    const q = RL.flat(S.bk.q || "");
+    const qNum = (S.bk.q || "").replace(/\s/g, "").replace(".", ",");
+    let list = (S.bk.scope === "tout" ? m.b.ops : m.b.ops.filter((o) => o.rel === rel.id)).filter((o) => {
+      if (S.bk.fcat && m.cat.get(o.id) !== S.bk.fcat) return false;
+      if (S.bk.facc && o.compteNom !== S.bk.facc) return false;
+      if (q) {
+        const d = m.info.get(o.id).d;
+        const hay = `${RL.flat(d.texte)} ${RL.flat(catName(m, m.cat.get(o.id)))}`;
+        const amt = Math.abs(o.montant).toFixed(2).replace(".", ",");
+        if (!hay.includes(q) && !(qNum && /\d/.test(qNum) && amt.includes(qNum))) return false;
+      }
+      return true;
+    });
+    list = list.slice().sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id < a.id ? -1 : 1));
+    const total = list.reduce((s, o) => s + o.montant, 0);
+    $("bk-ops-count").textContent = `${list.length} opération${list.length > 1 ? "s" : ""}${S.bk.fcat || q ? ` · ${signed(total)}` : ""}`;
+    if (!list.length) { box.append(el("p", { class: "muted" }, "Aucune opération ne correspond.")); return; }
+    const tpl = catSelect(m);
+    const MAX = 400;
+    list.slice(0, MAX).forEach((o) => {
+      const x = m.info.get(o.id);
+      const c = m.cat.get(o.id);
+      const how = m.how.get(o.id);
+      const row = el("div", { class: "op" });
+      row.append(el("span", { class: "op-date" }, dNum(o.date)));
+      const main = el("div", { class: "op-main" });
+      const name = el("div", { class: "op-name" }, RL.joli(x.d.tiers));
+      const TAG = { carte: "Carte", prlv: "Prélèvement", vir: "Virement", retrait: "Retrait", frais: "Frais", impaye: "Rejeté" };
+      if (TAG[x.d.type]) name.append(el("span", { class: `tag${x.d.type === "impaye" ? " warn" : ""}` }, TAG[x.d.type]));
+      main.append(name);
+      const sub = [];
+      if (x.d.lieu) sub.push(x.d.fx ? x.d.lieu : RL.joli(x.d.lieu));
+      if (accs.length > 1 && !RL.isCourant(o.compteNom || "")) sub.push(RL.joli(o.compteNom));
+      if (S.bk.scope === "tout") { const r = rels.find((k) => k.id === o.rel); if (r) sub.push(`relevé ${periodChip(r)}`); }
+      if (how === "regle") sub.push("classé comme d'habitude");
+      if (sub.length) main.append(el("div", { class: "op-sub" }, sub.join(" · ")));
+      row.append(main);
+      const sel = tpl.cloneNode(true);
+      sel.setAttribute("aria-label", `Classement de ${RL.joli(x.d.tiers)} du ${dNum(o.date)}`);
+      if (how !== "auto") {
+        sel.prepend(el("option", { value: "auto" }, "↺ Remettre en automatique"));
+        sel.classList.add("manuel");
+      }
+      sel.value = c;
+      sel.addEventListener("change", () => setOpCat(o.id, sel.value));
+      row.append(sel);
+      row.append(el("span", { class: `op-amt num${o.montant > 0 ? " in" : ""}` }, signed(o.montant)));
+      box.append(row);
+    });
+    if (list.length > MAX) box.append(el("p", { class: "muted" }, `Et ${list.length - MAX} de plus : affinez la recherche pour les voir.`));
+  }
+
+  function renderBkDocs(m) {
+    const box = $("bk-docs");
+    box.textContent = "";
+    m.releves.slice().reverse().forEach((r) => {
+      const row = el("div", { class: "hist-row" });
+      const info = el("div", { class: "doc-info" });
+      const n = m.b.ops.filter((o) => o.rel === r.id).length;
+      info.append(el("b", {}, periodLabel(r)));
+      const ok = r.comptes.every((c) => c.verifie);
+      info.append(el("div", { class: "op-sub" }, `${n} opérations · ${ok ? "✓ totaux vérifiés" : "⚠ totaux à vérifier"} · ${r.fichier || "relevé"}`));
+      row.append(info);
+      const act = el("span", { class: "actions" });
+      if (S.bk.confirmDel === r.id) {
+        act.append(el("span", { class: "muted" }, "Retirer ce relevé et ses opérations ?"));
+        const yes = el("button", { class: "btn", type: "button" }, "Oui, retirer");
+        yes.addEventListener("click", () => removeReleve(r.id));
+        const no = el("button", { class: "btn btn-quiet", type: "button" }, "Non");
+        no.addEventListener("click", () => { S.bk.confirmDel = null; renderBkDocs(bankModel()); });
+        act.append(yes, no);
+      } else {
+        if (r.pdf) {
+          const open = el("button", { class: "btn", type: "button" }, "Ouvrir le PDF");
+          open.addEventListener("click", () => openPdf(r));
+          act.append(open);
+        }
+        const del = el("button", { class: "btn btn-quiet", type: "button", "aria-label": `Retirer le relevé ${periodChip(r)}` }, "Retirer");
+        del.addEventListener("click", () => { S.bk.confirmDel = r.id; renderBkDocs(bankModel()); });
+        act.append(del);
+      }
+      row.append(act);
+      box.append(row);
+    });
+  }
+
+  /* --- commandes --- */
+  ["bk-add", "bk-add-first"].forEach((id) => $(id).addEventListener("click", () => $("bk-file").click()));
+  $("bk-file").addEventListener("change", (e) => { const f = Array.from(e.target.files || []); e.target.value = ""; importFiles(f); });
+  {
+    const zone = $("tab-banque");
+    zone.addEventListener("dragover", (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) { e.preventDefault(); zone.classList.add("drop"); } });
+    zone.addEventListener("dragleave", (e) => { if (e.target === zone) zone.classList.remove("drop"); });
+    zone.addEventListener("drop", (e) => { e.preventDefault(); zone.classList.remove("drop"); importFiles(e.dataTransfer && e.dataTransfer.files); });
+  }
+  document.querySelectorAll("[data-bkcurve]").forEach((b) => b.addEventListener("click", () => {
+    S.bk.curve = b.dataset.bkcurve;
+    try { localStorage.setItem("patrimoine-bk-curve", S.bk.curve); } catch (e) {}
+    const m = bankModel();
+    const rel = m.releves.find((r) => r.id === S.bk.rel);
+    if (rel) renderBkCurve(m, periodStats(m, rel.id), planTotals(), rel);
+  }));
+  let qTimer = 0;
+  $("bk-q").addEventListener("input", (e) => { S.bk.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(() => renderBkOps(bankModel()), 120); });
+  $("bk-fcat").addEventListener("change", (e) => { S.bk.fcat = e.target.value; renderBkOps(bankModel()); });
+  $("bk-facc").addEventListener("change", (e) => { S.bk.facc = e.target.value; renderBkOps(bankModel()); });
+  $("bk-fscope").addEventListener("change", (e) => { S.bk.scope = e.target.value; renderBkOps(bankModel()); });
+  {
+    let w1 = 0, w2 = 0, raf = 0;
+    const ro2 = new ResizeObserver(() => {
+      const a = $("bk-curve").clientWidth, b = $("bk-evo").clientWidth;
+      if (Math.abs(a - w1) < 2 && Math.abs(b - w2) < 2) return;
+      w1 = a; w2 = b;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if ($("tab-banque").hidden || $("bk-main").hidden) return;
+        const m = bankModel();
+        const rel = m.releves.find((r) => r.id === S.bk.rel);
+        if (!rel) return;
+        renderBkCurve(m, periodStats(m, rel.id), planTotals(), rel);
+        renderBkEvo(m, planTotals(), rel);
+      });
+    });
+    ro2.observe($("bk-curve"));
+    ro2.observe($("bk-evo"));
+  }
 
   /* ---------------- savings lever ---------------- */
   function setSaving(v, persist) {

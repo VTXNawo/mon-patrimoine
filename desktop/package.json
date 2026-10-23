@@ -21,6 +21,7 @@
     "productName": "Mon patrimoine",
     "files": [
       "main.js",
+      "preload.js",
       "app/**/*"
     ],
     "directories": {

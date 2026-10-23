@@ -1,6 +1,6 @@
 # Mon patrimoine
 
-Une app pour suivre mon capital, mon budget du mois, et calculer combien il me faudrait placé pour que mes placements paient mes dépenses.
+Une app pour suivre mon capital, mon budget du mois, comparer mes relevés de banque avec ce que j'avais prévu, et calculer combien il me faudrait placé pour que mes placements paient mes dépenses.
 
 Elle existe en trois versions, fabriquées à partir du même code :
 
@@ -10,7 +10,7 @@ Elle existe en trois versions, fabriquées à partir du même code :
 | **Android** (app à installer) | [Mon-patrimoine.apk](https://github.com/VTXNawo/mon-patrimoine/releases/latest/download/Mon-patrimoine.apk) |
 | **Navigateur** (téléphone ou ordinateur) | https://vtxnawo.github.io/mon-patrimoine/ |
 
-**Les données restent sur l'appareil.** Ce dépôt ne contient aucun chiffre personnel.
+**Les données restent sur l'appareil.** Ce dépôt ne contient aucun chiffre personnel, et aucun relevé de banque.
 Pour mettre ses données sur un appareil : bouton « Importer », puis choisir son fichier de données (`.json`).
 Pour les sauvegarder ou les passer sur un autre appareil : bouton « Sauvegarder mes données ».
 
@@ -18,9 +18,11 @@ Pour les sauvegarder ou les passer sur un autre appareil : bouton « Sauvegarder
 
 | Fichier ou dossier | Rôle |
 |---|---|
-| `index.html` | La structure des écrans : Patrimoine, Mes dépenses, Tester |
+| `index.html` | La structure des écrans : Patrimoine, Mes dépenses, Ma banque, Tester |
 | `styles.css` | L'apparence : couleurs, polices, mise en page |
-| `app.js` | Toute la logique : calculs, graphique, enregistrement des données |
+| `app.js` | Toute la logique : calculs, graphiques, enregistrement des données |
+| `releve.js` | La lecture des relevés PDF du Crédit Mutuel et le classement automatique des opérations |
+| `vendor/pdfjs/` | pdf.js (Mozilla), qui lit le texte des PDF sur l'appareil |
 | `icons/` | Les icônes de l'app |
 | `manifest.webmanifest`, `sw.js` | Ce qui rend la version navigateur installable et utilisable hors connexion |
 | `desktop/` | L'emballage Windows (Electron) |

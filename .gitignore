@@ -6,3 +6,8 @@ mobile/android/
 *.apk
 *.exe
 .DS_Store
+
+# jamais de données personnelles dans le dépôt
+*.pdf
+mes-donnees*.json
+patrimoine-donnees-*.json

@@ -42,6 +42,7 @@
   <nav class="tabs" role="tablist" aria-label="Rubriques">
     <button type="button" role="tab" id="t-patrimoine" data-tab="patrimoine" aria-controls="tab-patrimoine" aria-selected="true">Patrimoine</button>
     <button type="button" role="tab" id="t-depenses" data-tab="depenses" aria-controls="tab-depenses" aria-selected="false" tabindex="-1">Mes dépenses</button>
+    <button type="button" role="tab" id="t-banque" data-tab="banque" aria-controls="tab-banque" aria-selected="false" tabindex="-1">Ma banque</button>
     <button type="button" role="tab" id="t-simulateur" data-tab="simulateur" aria-controls="tab-simulateur" aria-selected="false" tabindex="-1">Tester</button>
   </nav>
 
@@ -190,6 +191,129 @@
     </section>
   </div>
 
+  <div class="panel" id="tab-banque" role="tabpanel" aria-labelledby="t-banque" hidden>
+    <section class="card bk-empty" id="bk-empty" aria-labelledby="bk-empty-title">
+      <h2 id="bk-empty-title">Mes relevés de banque</h2>
+      <p class="bk-lead">Ajoutez vos relevés PDF du Crédit Mutuel, ceux qui vont du 10 au 10. L'app lit chaque opération, la range toute seule dans votre budget, puis compare avec ce que vous aviez prévu : ligne par ligne, avec les courbes du mois.</p>
+      <div class="actions">
+        <button class="btn btn-primary" type="button" id="bk-add-first">Ajouter mes relevés (PDF)</button>
+        <span class="muted">Vous pouvez en choisir plusieurs d'un coup<span class="drop-hint">, ou les glisser ici</span>.</span>
+      </div>
+      <p class="muted bk-private">Les relevés restent sur cet appareil : ils ne sont envoyés nulle part.</p>
+    </section>
+
+    <section class="card bk-top" id="bk-top" aria-label="Choisir un relevé" hidden>
+      <div class="bk-bar">
+        <div class="bk-periods" id="bk-periods" role="group" aria-label="Relevé affiché"></div>
+        <button class="btn" type="button" id="bk-add">+ Ajouter des relevés</button>
+      </div>
+      <h2 class="bk-title" id="bk-title"></h2>
+    </section>
+    <input type="file" id="bk-file" accept="application/pdf,.pdf" multiple hidden>
+    <div class="bk-msg" id="bk-msg" role="status" hidden></div>
+
+    <div class="panel" id="bk-main" hidden>
+      <section class="figures f4" aria-label="Le relevé en chiffres">
+        <div class="fig">
+          <span class="eyebrow">Ce qui est rentré</span>
+          <span class="big" id="bk-in">—</span>
+          <span class="sub" id="bk-in-sub"></span>
+        </div>
+        <div class="fig">
+          <span class="eyebrow">Ce que j'ai dépensé</span>
+          <span class="big" id="bk-out">—</span>
+          <span class="sub" id="bk-out-sub"></span>
+        </div>
+        <div class="fig">
+          <span class="eyebrow">Ce qu'il reste</span>
+          <span class="big" id="bk-rest">—</span>
+          <span class="sub" id="bk-rest-sub"></span>
+        </div>
+        <div class="fig">
+          <span class="eyebrow">Mis de côté</span>
+          <span class="big" id="bk-save">—</span>
+          <span class="sub" id="bk-save-sub"></span>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="bk-sum-title">
+        <span class="eyebrow" id="bk-sum-title">Par rapport au plan</span>
+        <p class="bk-sentence" id="bk-sentence"></p>
+        <div class="bk-alerts" id="bk-alerts"></div>
+      </section>
+
+      <section class="card" aria-labelledby="bk-lines-title">
+        <div class="bud-head">
+          <h2 id="bk-lines-title">Prévu et réel, ligne par ligne</h2>
+          <div class="legend">
+            <span><i class="box out"></i>Réel</span>
+            <span><i class="tick"></i>Prévu</span>
+          </div>
+        </div>
+        <div id="bk-lines" class="pr"></div>
+        <p class="muted small">Touchez une ligne pour voir ses opérations.</p>
+      </section>
+
+      <section class="card" aria-labelledby="bk-curve-title">
+        <div class="chart-top">
+          <h2 id="bk-curve-title">Mes dépenses jour après jour</h2>
+          <div class="seg" role="group" aria-label="Ce que montre la courbe">
+            <button type="button" data-bkcurve="dep" aria-pressed="true">Mes dépenses</button>
+            <button type="button" data-bkcurve="solde" aria-pressed="false">Mon compte courant</button>
+          </div>
+        </div>
+        <div class="legend" id="bk-curve-legend"></div>
+        <div class="chart bk-chart" id="bk-curve"></div>
+      </section>
+
+      <section class="card" aria-labelledby="bk-evo-title">
+        <div class="chart-top">
+          <h2 id="bk-evo-title">D'un relevé à l'autre</h2>
+          <div class="legend">
+            <span><i class="box in"></i>Ce qui est rentré</span>
+            <span><i class="box out"></i>Ce que j'ai dépensé</span>
+            <span><i class="sw plan"></i>Dépenses prévues</span>
+          </div>
+        </div>
+        <div class="chart bk-chart" id="bk-evo"></div>
+        <details class="years">
+          <summary>Voir les chiffres relevé par relevé</summary>
+          <div class="tscroll"><table id="bk-evo-table"></table></div>
+        </details>
+      </section>
+
+      <section class="card" aria-labelledby="bk-ops-title" id="bk-ops-card">
+        <div class="bud-head">
+          <h2 id="bk-ops-title">Mes opérations</h2>
+          <span class="muted" id="bk-ops-count"></span>
+        </div>
+        <div class="bk-filters">
+          <input type="search" id="bk-q" placeholder="Chercher : Engie, Leclerc, 12,99…" aria-label="Chercher une opération">
+          <select id="bk-fcat" aria-label="Filtrer par classement"></select>
+          <select id="bk-facc" aria-label="Filtrer par compte"></select>
+          <select id="bk-fscope" aria-label="Quels relevés">
+            <option value="">Ce relevé</option>
+            <option value="tout">Tous les relevés</option>
+          </select>
+        </div>
+        <div class="bk-ask" id="bk-ask" role="status" hidden></div>
+        <div id="bk-ops" class="bk-ops"></div>
+      </section>
+
+      <section class="card" aria-labelledby="bk-docs-title">
+        <h2 id="bk-docs-title">Mes relevés</h2>
+        <div id="bk-docs" class="hist"></div>
+      </section>
+
+      <section class="notes" aria-label="Comment c'est calculé">
+        <p>Les relevés et leurs opérations restent sur cet appareil. La sauvegarde de vos données garde les opérations et vos classements, pas les fichiers PDF.</p>
+        <p>Les virements entre vos comptes ne comptent ni comme une dépense ni comme une rentrée : ils servent à calculer ce que vous avez mis de côté (ou repris sur votre épargne).</p>
+        <p>Un prélèvement rejeté puis remboursé par la banque s'annule avec le prélèvement d'origine. Les frais d'incident, eux, restent des dépenses.</p>
+        <p>À chaque relevé ajouté, les soldes de fin de relevé vont aussi dans l'onglet Patrimoine, sauf si vous aviez déjà saisi vos soldes ce mois-là.</p>
+      </section>
+    </div>
+  </div>
+
   <div class="panel" id="tab-simulateur" role="tabpanel" aria-labelledby="t-simulateur" hidden>
     <section class="card" aria-labelledby="sim-title">
       <h2 id="sim-title">Tester : combien il me faudrait placé ?</h2>
@@ -249,6 +373,7 @@
 </div>
 
 <script type="application/json" id="donnees">null</script>
+<script src="releve.js"></script>
 <script src="app.js"></script>
 
 <script>
