@@ -6,8 +6,8 @@ Elle existe en trois versions, fabriquées à partir du même code :
 
 | Version | Où la trouver |
 |---|---|
-| **Windows** (programme à installer) | page **Releases** du dépôt, fichier `.exe` |
-| **Android** (app à installer) | page **Releases** du dépôt, fichier `.apk` |
+| **Windows** (programme à installer) | [Mon-patrimoine-installation.exe](https://github.com/VTXNawo/mon-patrimoine/releases/latest/download/Mon-patrimoine-installation.exe) |
+| **Android** (app à installer) | [Mon-patrimoine.apk](https://github.com/VTXNawo/mon-patrimoine/releases/latest/download/Mon-patrimoine.apk) |
 | **Navigateur** (téléphone ou ordinateur) | https://vtxnawo.github.io/mon-patrimoine/ |
 
 **Les données restent sur l'appareil.** Ce dépôt ne contient aucun chiffre personnel.
@@ -29,5 +29,7 @@ Pour les sauvegarder ou les passer sur un autre appareil : bouton « Sauvegarder
 
 ## Comment les apps sont fabriquées
 
-À chaque modification sur la branche `main`, GitHub fabrique le programme Windows et l'app Android (onglet **Actions**).
-Quand une version est marquée d'une étiquette (`v1.0.0`, `v1.1.0`…), elles sont aussi publiées dans **Releases**.
+À chaque modification sur la branche `main`, GitHub fabrique le programme Windows et l'app Android (onglet **Actions**),
+puis les publie comme nouvelle version dans **Releases**. Les liens de téléchargement ci-dessus donnent toujours la dernière version.
+
+Pour mettre à jour une app déjà installée : télécharger la nouvelle version et l'installer par-dessus. Les données sont gardées.

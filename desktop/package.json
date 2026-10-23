@@ -49,7 +49,7 @@
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "language": "1036",
-      "artifactName": "Mon-patrimoine-installation-${version}.${ext}"
+      "artifactName": "Mon-patrimoine-installation.${ext}"
     },
     "afterPack": "./afterPack.js"
   },

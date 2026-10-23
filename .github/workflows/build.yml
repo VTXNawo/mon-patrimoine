@@ -1,7 +1,7 @@
 name: Fabriquer les apps
 
-# À chaque modification : GitHub fabrique le programme Windows et l'app Android.
-# Avec une étiquette de version (v1.0.0, v1.1.0…) : il les publie aussi dans « Releases ».
+# À chaque modification de la branche main, GitHub fabrique le programme Windows et l'app Android,
+# puis les publie comme nouvelle version dans « Releases » (v1.0.1, v1.0.2…).
 on:
   push:
     branches: [main]
@@ -57,7 +57,7 @@ jobs:
       - name: Fabriquer l'APK
         working-directory: mobile/android
         run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon
-      - run: cp android/app/build/outputs/apk/debug/app-debug.apk "Mon-patrimoine-${GITHUB_REF_NAME//\//-}.apk"
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk Mon-patrimoine.apk
       - uses: actions/upload-artifact@v4
         with:
           name: android
@@ -65,7 +65,7 @@ jobs:
 
   release:
     name: Publier dans Releases
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main'
     needs: [windows, android]
     runs-on: ubuntu-latest
     steps:
@@ -75,6 +75,10 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Mon patrimoine 1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
           files: out/*
           body: |
             **Windows** : téléchargez le fichier `.exe`, ouvrez-le et suivez l'installation.
