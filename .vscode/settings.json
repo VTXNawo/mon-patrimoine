@@ -1,0 +1,7 @@
+{
+  "liveServer.settings.port": 5500,
+  "liveServer.settings.root": "/",
+  "liveServer.settings.ignoreFiles": ["desktop/**", "mobile/**", ".github/**"],
+  "files.exclude": { "**/node_modules": true },
+  "editor.wordWrap": "on"
+}
