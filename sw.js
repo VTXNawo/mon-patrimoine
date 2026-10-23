@@ -1,7 +1,7 @@
-// Mon patrimoine : fonctionne hors connexion. Version 1.
-const CACHE = "patrimoine-v1";
+// Mon patrimoine : fonctionne hors connexion. Version 2.
+const CACHE = "patrimoine-v2";
 const FONTS = "patrimoine-fonts";
-const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icons/icon-192.png", "./icons/icon-512.png",
+const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./manifest.webmanifest", "./icons/icon-192.png", "./icons/icon-512.png",
   "./icons/icon-maskable-512.png", "./icons/apple-touch-icon.png", "./icons/favicon-32.png"];
 
 self.addEventListener("install", (e) => {

@@ -1,0 +1,6 @@
+{
+  "appId": "fr.vtxnawo.monpatrimoine",
+  "appName": "Mon patrimoine",
+  "webDir": "www",
+  "android": { "allowMixedContent": false }
+}

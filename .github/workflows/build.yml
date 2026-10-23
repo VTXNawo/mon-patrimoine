@@ -1,0 +1,85 @@
+name: Fabriquer les apps
+
+# À chaque modification : GitHub fabrique le programme Windows et l'app Android.
+# Avec une étiquette de version (v1.0.0, v1.1.0…) : il les publie aussi dans « Releases ».
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Programme Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: desktop/dist/*.exe
+
+  android:
+    name: App Android
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Clé de signature (la même à chaque version, pour mettre à jour sans tout perdre)
+        run: mkdir -p ~/.android && cp debug.keystore ~/.android/debug.keystore
+      - run: npm install --no-audit --no-fund
+      - run: npm run copy-web
+      - run: npx cap add android
+      - run: npx capacitor-assets generate --android
+      - run: npx cap sync android
+      - name: Fabriquer l'APK
+        working-directory: mobile/android
+        run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk "Mon-patrimoine-${GITHUB_REF_NAME//\//-}.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: mobile/*.apk
+
+  release:
+    name: Publier dans Releases
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          body: |
+            **Windows** : téléchargez le fichier `.exe`, ouvrez-le et suivez l'installation.
+            Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur « Informations complémentaires » puis « Exécuter quand même ».
+
+            **Android** : téléchargez le fichier `.apk` sur le téléphone et ouvrez-le. Autorisez l'installation d'applications inconnues si le téléphone le demande.
+
+            Vos données restent sur chaque appareil : utilisez « Sauvegarder mes données » puis « Importer » pour les passer d'un appareil à l'autre.

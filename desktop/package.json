@@ -1,0 +1,60 @@
+{
+  "name": "mon-patrimoine",
+  "productName": "Mon patrimoine",
+  "version": "1.0.0",
+  "description": "Programme Windows de Mon patrimoine (Electron).",
+  "author": "VTXNawo",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "copy-web": "node copy-web.js",
+    "start": "npm run copy-web && electron .",
+    "dist": "npm run copy-web && electron-builder --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "33.2.0",
+    "electron-builder": "25.1.8",
+    "resedit": "1.7.2"
+  },
+  "build": {
+    "appId": "fr.vtxnawo.monpatrimoine",
+    "productName": "Mon patrimoine",
+    "files": [
+      "main.js",
+      "app/**/*"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Mon patrimoine",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "language": "1036",
+      "artifactName": "Mon-patrimoine-installation-${version}.${ext}"
+    },
+    "afterPack": "./afterPack.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VTXNawo/mon-patrimoine.git"
+  }
+}
