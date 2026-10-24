@@ -23,6 +23,7 @@ Pour les sauvegarder ou les passer sur un autre appareil : bouton « Sauvegarder
 | `app.js` | Toute la logique : calculs, graphiques, enregistrement des données |
 | `releve.js` | La lecture des relevés PDF du Crédit Mutuel et le classement automatique des opérations |
 | `vendor/pdfjs/` | pdf.js (Mozilla), qui lit le texte des PDF sur l'appareil |
+| `vendor/fonts/` | La police Geist (licence SIL OFL), incluse pour que l'app marche sans connexion |
 | `icons/` | Les icônes de l'app |
 | `manifest.webmanifest`, `sw.js` | Ce qui rend la version navigateur installable et utilisable hors connexion |
 | `desktop/` | L'emballage Windows (Electron) |

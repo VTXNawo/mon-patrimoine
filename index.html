@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="description" content="Mon capital, mon budget du mois et mes simulations. Les données restent sur l'appareil.">
-<meta name="theme-color" content="#1f3a4d" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0e1620" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1216" media="(prefers-color-scheme: dark)">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Patrimoine">
@@ -14,37 +14,53 @@
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,-apple-system,'Segoe UI',sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
-<script>window.PATRIMOINE_APP = true;</script>
+<script>window.PATRIMOINE_APP = true;
+try { var th = localStorage.getItem("patrimoine-theme"); if (th === "light" || th === "dark") document.documentElement.dataset.theme = th; } catch (e) {}</script>
 <title>Mon patrimoine</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="preload" href="vendor/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="wrap" id="app">
+<div class="app" id="app">
+  <aside class="side">
+    <div class="brand">
+      <svg class="brand-mark" width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7"></rect><path d="M7 19l5-6 4 3 5-7"></path></svg>
+      <span>Mon patrimoine</span>
+    </div>
+
+    <nav class="tabs" role="tablist" aria-label="Rubriques">
+      <button type="button" role="tab" id="t-patrimoine" data-tab="patrimoine" aria-controls="tab-patrimoine" aria-selected="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"></path><path d="M7 15l4-4 3 3 5-6"></path></svg><span>Patrimoine</span></button>
+      <button type="button" role="tab" id="t-depenses" data-tab="depenses" aria-controls="tab-depenses" aria-selected="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2"></rect><path d="M3 10h18"></path><path d="M16 14h2"></path></svg><span>Mes dépenses</span></button>
+      <button type="button" role="tab" id="t-banque" data-tab="banque" aria-controls="tab-banque" aria-selected="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10l9-6 9 6"></path><path d="M5 10v8M9 10v8M15 10v8M19 10v8"></path><path d="M3 21h18"></path></svg><span>Ma banque</span></button>
+      <button type="button" role="tab" id="t-simulateur" data-tab="simulateur" aria-controls="tab-simulateur" aria-selected="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6"></path><path d="M10 3v6L5 18a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"></path></svg><span>Tester</span></button>
+    </nav>
+
+    <div class="side-foot">
+      <div class="seg seg-theme" role="group" aria-label="Apparence">
+        <button type="button" data-theme-set="light" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>Clair</button>
+        <button type="button" data-theme-set="dark" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path></svg>Sombre</button>
+      </div>
+      <p class="side-note">Vos données restent sur cet appareil.</p>
+      <button class="btn" id="btn-backup" type="button" hidden>Sauvegarder mes données</button>
+      <button class="btn btn-quiet" id="btn-import" type="button" hidden>Importer un fichier</button>
+      <input type="file" id="file-import" accept=".json,.html,application/json,text/html" hidden>
+    </div>
+  </aside>
+
+  <div class="main">
+  <div class="main-in">
   <header class="head">
     <div>
-      <h1>Mon patrimoine</h1>
+      <h1 id="page-title">Patrimoine</h1>
       <p id="asof">Vos comptes s'affichent ici dès qu'ils sont chargés.</p>
     </div>
     <div class="head-actions">
       <span class="export-note" id="export-note" role="status"></span>
       <button class="btn" id="btn-export" type="button" hidden>Exporter en HTML</button>
-      <button class="btn" id="btn-import" type="button" hidden>Importer</button>
-      <button class="btn" id="btn-backup" type="button" hidden>Sauvegarder mes données</button>
-      <input type="file" id="file-import" accept=".json,.html,application/json,text/html" hidden>
       <button class="btn btn-primary" id="btn-edit" type="button" hidden>Mettre à jour mes soldes</button>
     </div>
   </header>
   <p class="offline" id="offline" hidden></p>
-
-  <nav class="tabs" role="tablist" aria-label="Rubriques">
-    <button type="button" role="tab" id="t-patrimoine" data-tab="patrimoine" aria-controls="tab-patrimoine" aria-selected="true">Patrimoine</button>
-    <button type="button" role="tab" id="t-depenses" data-tab="depenses" aria-controls="tab-depenses" aria-selected="false" tabindex="-1">Mes dépenses</button>
-    <button type="button" role="tab" id="t-banque" data-tab="banque" aria-controls="tab-banque" aria-selected="false" tabindex="-1">Ma banque</button>
-    <button type="button" role="tab" id="t-simulateur" data-tab="simulateur" aria-controls="tab-simulateur" aria-selected="false" tabindex="-1">Tester</button>
-  </nav>
 
   <div class="panel" id="tab-patrimoine" role="tabpanel" aria-labelledby="t-patrimoine">
 
@@ -64,18 +80,11 @@
       <span class="big key-avec" id="k-horizon">—</span>
       <span class="sub" id="k-horizon-sub">avec votre épargne mensuelle</span>
     </div>
-  </section>
-
-  <section class="lever" aria-label="Épargne mensuelle">
-    <label for="save-num">Je mets de côté chaque mois</label>
-    <span class="stepper">
-      <button type="button" id="save-minus" aria-label="Moins 10 €">−</button>
-      <input id="save-num" type="number" inputmode="decimal" min="0" step="5" value="150" aria-label="Montant mis de côté chaque mois, en euros">
-      <button type="button" id="save-plus" aria-label="Plus 10 €">+</button>
-    </span>
-    <input id="save-range" type="range" min="0" max="400" step="5" value="150" aria-label="Montant mis de côté chaque mois">
-    <span class="left" id="left">Il me reste pour vivre <b>—</b></span>
-    <span class="saved-note" id="saved-note"></span>
+    <div class="fig">
+      <span class="eyebrow">Il me reste pour vivre</span>
+      <span class="big" id="k-left">—</span>
+      <span class="sub" id="k-left-sub">par mois, après épargne</span>
+    </div>
   </section>
 
   <section class="card edit" id="edit" hidden aria-label="Mettre à jour mes soldes">
@@ -95,49 +104,82 @@
     </div>
   </section>
 
-  <section class="card" aria-labelledby="chart-title">
-    <div class="chart-top">
-      <h2 id="chart-title">Mon capital mois par mois</h2>
-      <div class="seg" role="group" aria-label="Ce que montre le graphique">
-        <button type="button" data-view="capital" aria-pressed="true">Capital</button>
-        <button type="button" data-view="passif" aria-pressed="false">Ce que ça rapporte</button>
+  <div class="pat-grid">
+    <section class="card" aria-labelledby="chart-title">
+      <div class="chart-top">
+        <h2 id="chart-title">Mon capital mois par mois</h2>
+        <div class="seg-row">
+          <div class="seg" role="group" aria-label="Ce que montre le graphique">
+            <button type="button" data-view="capital" aria-pressed="true">Capital</button>
+            <button type="button" data-view="passif" aria-pressed="false">Ce que ça rapporte</button>
+          </div>
+          <div class="seg" role="group" aria-label="Jusqu'à quel âge">
+            <button type="button" data-age="27" aria-pressed="true">27 ans</button>
+            <button type="button" data-age="30" aria-pressed="false">30 ans</button>
+            <button type="button" data-age="35" aria-pressed="false">35 ans</button>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="chart-top">
       <div class="legend" id="legend">
-        <span><i class="sw sans"></i>Sans rien ajouter</span>
         <span><i class="sw avec"></i><span id="lg-avec">Avec 150 € par mois</span></span>
+        <span><i class="sw sans"></i>Sans rien ajouter</span>
         <span><i class="sw-dot"></i>Vos relevés</span>
       </div>
-      <div class="seg" role="group" aria-label="Jusqu'à quel âge">
-        <button type="button" data-age="27" aria-pressed="true">27 ans</button>
-        <button type="button" data-age="30" aria-pressed="false">30 ans</button>
-        <button type="button" data-age="35" aria-pressed="false">35 ans</button>
+      <div class="chart" id="chart">
+        <div class="empty" id="chart-empty">
+          <span>La courbe de votre capital apparaît ici dès que vos soldes sont chargés.</span>
+        </div>
       </div>
-    </div>
-    <div class="chart" id="chart">
-      <div class="empty" id="chart-empty">
-        <span>La courbe de votre capital apparaît ici dès que vos soldes sont chargés.</span>
-      </div>
-    </div>
-    <details class="years" id="years">
-      <summary>Voir les chiffres année par année</summary>
-      <div class="tscroll"><table id="years-table"></table></div>
-    </details>
-  </section>
+      <details class="years" id="years">
+        <summary>Voir les chiffres année par année</summary>
+        <div class="tscroll"><table id="years-table"></table></div>
+      </details>
+    </section>
 
-  <section class="card" aria-labelledby="acc-title">
-    <h2 id="acc-title">Mes comptes</h2>
-    <div class="tscroll"><table id="acc-table"></table></div>
-  </section>
+    <div class="pat-side">
+      <section class="card lever" aria-labelledby="save-title">
+        <h2 id="save-title">Je mets de côté chaque mois</h2>
+        <span class="stepper">
+          <button type="button" id="save-minus" aria-label="Moins 10 €">−</button>
+          <input id="save-num" type="number" inputmode="decimal" min="0" step="5" value="150" aria-label="Montant mis de côté chaque mois, en euros">
+          <button type="button" id="save-plus" aria-label="Plus 10 €">+</button>
+        </span>
+        <input id="save-range" type="range" min="0" max="400" step="5" value="150" aria-label="Montant mis de côté chaque mois">
+        <p class="left" id="left">Il me reste pour vivre <b>—</b></p>
+        <span class="saved-note" id="saved-note"></span>
+      </section>
+
+      <section class="card" aria-labelledby="acc-title">
+        <h2 id="acc-title">Mes comptes</h2>
+        <div class="acc-list" id="acc-list"></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="pat-grid">
+    <section class="card" aria-labelledby="pb-title">
+      <div class="card-head">
+        <h2 id="pb-title">Mon budget du mois</h2>
+        <span class="card-meta" id="pat-bud-sum"></span>
+      </div>
+      <div id="pat-bud"></div>
+    </section>
+    <section class="card" aria-labelledby="pk-title">
+      <div class="card-head">
+        <h2 id="pk-title">Dernier relevé</h2>
+        <span class="card-meta" id="pat-bank-when"></span>
+      </div>
+      <div class="pat-bank" id="pat-bank"></div>
+    </section>
+  </div>
 
   <section class="card" aria-labelledby="hist-title" id="hist-card" hidden>
-    <h2 id="hist-title">Mes relevés</h2>
+    <h2 id="hist-title">Mes relevés de soldes</h2>
     <div class="hist" id="hist"></div>
   </section>
 
   <section class="notes" aria-label="Comment c'est calculé">
-    <p>Trait plein : vos comptes tels qu'ils sont, avec seulement leurs intérêts. Pointillés : la même chose en ajoutant chaque mois le montant mis de côté.</p>
+    <p>Trait plein : la même chose en ajoutant chaque mois le montant mis de côté. Pointillés : vos comptes tels qu'ils sont, avec seulement leurs intérêts.</p>
     <p>L'épargne va d'abord sur le Livret Jeune jusqu'à son plafond de versements, puis sur le Livret Bleu. À la fermeture du Livret Jeune, son solde passe sur le Livret Bleu.</p>
     <p>Les intérêts sont ajoutés chaque mois au taux de chaque compte. En vrai, les livrets les versent une fois par an, en janvier.</p>
   </section>
@@ -369,6 +411,9 @@
       <p>Ces calculs ne tiennent pas compte de la hausse des prix : avec les années, les mêmes dépenses coûteront plus cher.</p>
       <p>Au-delà du taux des livrets, un rendement passe par la Bourse : il n'est pas garanti et varie d'une année à l'autre.</p>
     </section>
+  </div>
+
+  </div>
   </div>
 </div>
 

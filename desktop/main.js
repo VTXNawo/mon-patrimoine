@@ -6,13 +6,13 @@ if (!app.requestSingleInstanceLock()) app.quit();
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1200,
+    width: 1360,
     height: 900,
     minWidth: 420,
     minHeight: 600,
     title: "Mon patrimoine",
     icon: path.join(__dirname, "app", "icons", "icon-512.png"),
-    backgroundColor: "#f3f5f8",
+    backgroundColor: "#f5f6f8",
     autoHideMenuBar: true,
     show: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false, preload: path.join(__dirname, "preload.js") },

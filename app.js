@@ -156,6 +156,12 @@
     sim: {},            // simulator values the viewer changed
   };
   const TABS = ["patrimoine", "depenses", "banque", "simulateur"];
+  const TAB_TITLE = { patrimoine: "Patrimoine", depenses: "Mes dépenses", banque: "Ma banque", simulateur: "Tester" };
+  const TAB_SUB = {
+    depenses: "Ce qui rentre et ce qui sort chaque mois, d'après votre budget",
+    banque: "Vos relevés du Crédit Mutuel comparés à votre budget",
+    simulateur: "Combien il vous faudrait placé pour que vos placements paient vos dépenses",
+  };
   {
     const h = (location.hash || "").slice(1);
     let t = TABS.includes(h) ? h : null;
@@ -203,6 +209,8 @@
     renderChart();
     renderYears();
     renderAccounts();
+    renderPatBudget();
+    renderPatBank();
     renderHistory();
     renderTabs();
     renderBudget();
@@ -230,6 +238,7 @@
     $("btn-import").hidden = !S.app;
     $("btn-backup").hidden = !(S.app && S.doc);
     btn.textContent = S.doc ? "Mettre à jour mes soldes" : "Ajouter mes soldes";
+    if (S.tab !== "patrimoine") { $("asof").textContent = TAB_SUB[S.tab] || ""; return; }
     if (!S.loaded) { $("asof").textContent = "Vos comptes s'affichent ici dès qu'ils sont chargés."; return; }
     if (!L) {
       $("asof").textContent = S.app
@@ -245,6 +254,17 @@
 
   function renderFigures() {
     const L = latest();
+    const marge = margeMois(), kl = $("k-left");
+    if (marge > 0) {
+      const rest = marge - saving();
+      kl.textContent = EUR2.format(rest);
+      kl.classList.toggle("low", rest < 50);
+      $("k-left-sub").textContent = `par mois, après ${EUR0.format(saving())} d'épargne`;
+    } else {
+      kl.textContent = "—";
+      kl.classList.remove("low");
+      $("k-left-sub").textContent = "remplissez « Mes dépenses »";
+    }
     if (!L) {
       ["k-total", "k-passif", "k-horizon"].forEach((id) => { $(id).textContent = "—"; });
       return;
@@ -483,60 +503,114 @@
   }
 
   function renderAccounts() {
-    const t = $("acc-table");
-    t.textContent = "";
+    const box = $("acc-list");
+    box.textContent = "";
     const L = latest();
     if (!L) {
-      const tr = el("tr");
-      tr.append(el("td", { class: "muted" }, S.loaded ? "Aucun compte pour l'instant." : "Chargement de vos comptes…"));
-      t.append(tr);
+      box.append(el("p", { class: "muted small" }, S.loaded ? "Aucun compte pour l'instant." : "Chargement de vos comptes…"));
       return;
     }
     const comptes = S.proj.comptes;
     const bal = L.row.sansParts;
-    const total = bal.reduce((s, v) => s + v, 0);
-    const head = el("tr");
-    [["Compte", ""], ["Solde", "r"], ["Part", ""], ["Taux par an", "r"], ["Par mois", "r"], ["Par an", "r"]]
-      .forEach(([h, c]) => head.append(el("th", c ? { class: c } : {}, h)));
-    const thead = el("thead"); thead.append(head);
-    const tb = el("tbody");
+    const total = bal.reduce((s, v) => s + Math.max(0, v), 0);
+    const bar = el("div", { class: "acc-bar", role: "img", "aria-label": "Répartition entre vos comptes" });
     comptes.forEach((c, i) => {
-      const tr = el("tr");
-      const td = el("td");
-      td.append(el("div", { class: "acc-name" }, c.nom));
-      if (c.type) td.append(el("div", { class: "acc-type" }, c.type));
-      if (c.description) td.append(el("div", { class: "acc-desc" }, c.description));
+      if (!(bal[i] > 0) || !(total > 0)) return;
+      const seg = el("i", { class: "c" + (i % 5), title: `${c.nom} : ${PCT0.format(bal[i] / total)}` });
+      seg.style.flex = `${bal[i] / total} 1 0`;
+      bar.append(seg);
+    });
+    if (total > 0) box.append(bar);
+    comptes.forEach((c, i) => {
+      const rate = Number(c.taux) || 0;
+      const row = el("div", { class: "acc-row" });
+      if (c.description) row.title = c.description;
+      const info = el("div");
+      info.append(el("div", { class: "acc-name" }, c.nom));
+      info.append(el("div", { class: "acc-type" }, [c.type || "Compte", PCT.format(rate)].join(" · ")));
       const chips = el("div", { class: "chips" });
       if (c.plafondVersements) {
         const room = Math.max(0, c.plafondVersements - bal[i]);
         chips.append(el("span", { class: "chip" }, `Place avant le plafond : ${EUR2.format(room)}`));
       }
       if (c.fermeture) chips.append(el("span", { class: "chip" }, `À fermer fin ${c.fermeture.slice(0, 4)}`));
-      if (chips.childNodes.length) td.append(chips);
-      tr.append(td);
-      tr.append(el("td", { class: "r num" }, EUR2.format(bal[i])));
-      const share = total > 0 ? bal[i] / total : 0;
-      const sd = el("td");
-      const wrap = el("div", { class: "share" });
-      const bar = el("div", { class: "bar" });
-      const fill = el("i"); fill.style.width = `${(share * 100).toFixed(1)}%`;
-      bar.append(fill);
-      wrap.append(el("span", { class: "num" }, PCT0.format(share)), bar);
-      sd.append(wrap);
-      tr.append(sd);
-      const rate = Number(c.taux) || 0;
-      tr.append(el("td", { class: "r num" }, PCT.format(rate)));
-      tr.append(el("td", { class: "r num" }, EUR2.format(bal[i] * rate / 12)));
-      tr.append(el("td", { class: "r num" }, EUR2.format(bal[i] * rate)));
-      tb.append(tr);
+      if (chips.childNodes.length) info.append(chips);
+      const amt = el("div", { class: "acc-amt" }, EUR2.format(bal[i]));
+      if (rate > 0) amt.append(el("span", { class: "acc-gain" }, `+${EUR2.format(bal[i] * rate / 12)} /mois`));
+      row.append(el("span", { class: "acc-dot c" + (i % 5), "aria-hidden": "true" }), info, amt);
+      box.append(row);
     });
-    const yearly = bal.reduce((s, v, i) => s + v * (Number(comptes[i].taux) || 0), 0);
-    const tr = el("tr", { class: "total" });
-    tr.append(el("td", {}, "Total"), el("td", { class: "r num" }, EUR2.format(total)), el("td", { class: "num" }, total > 0 ? "100 %" : "—"),
-      el("td", { class: "r num", title: "Moyenne de vos comptes selon leur poids" }, total > 0 ? PCT.format(yearly / total) : "—"),
-      el("td", { class: "r num" }, EUR2.format(yearly / 12)), el("td", { class: "r num" }, EUR2.format(yearly)));
-    tb.append(tr);
-    t.append(thead, tb);
+  }
+
+  /* --- résumés sur l'écran Patrimoine : budget et dernier relevé --- */
+  function renderPatBudget() {
+    const box = $("pat-bud"), sum = $("pat-bud-sum");
+    box.textContent = ""; sum.textContent = "";
+    const b = budgetOf(S.doc);
+    const deps = (b && Array.isArray(b.depenses) ? b.depenses : []).filter((l) => Number(l.montant) > 0)
+      .slice().sort((x, y) => Number(y.montant) - Number(x.montant));
+    const t = budgetTotals(S.doc);
+    if (!deps.length) {
+      box.append(el("p", { class: "pk-empty" }, "Ajoutez vos dépenses du mois dans « Mes dépenses » pour les voir ici."));
+      const go = el("button", { class: "go", type: "button" }, "Ouvrir Mes dépenses →");
+      go.addEventListener("click", () => setTab("depenses"));
+      box.append(go);
+      return;
+    }
+    sum.append(`Rentrées ${EUR2.format(t.recettes)} · Dépenses `, el("b", {}, EUR2.format(t.depenses)));
+    const max = Number(deps[0].montant) || 1;
+    const grid = el("div", { class: "pb-grid" });
+    const top = deps.slice(0, 6);
+    top.forEach((l) => {
+      const v = Number(l.montant) || 0;
+      const bar = el("div", { class: "pb-bar", "aria-hidden": "true" });
+      const fill = el("i"); fill.style.width = `${Math.max(2, v / max * 100).toFixed(1)}%`;
+      bar.append(fill);
+      grid.append(el("span", { class: "pb-name", title: l.nom }, l.nom), bar, el("span", { class: "pb-amt" }, EUR2.format(v)));
+    });
+    const rest = deps.slice(6);
+    if (rest.length) {
+      const v = rest.reduce((s, l) => s + (Number(l.montant) || 0), 0);
+      grid.append(el("span", { class: "pb-more" }, `${rest.length} autre${rest.length > 1 ? "s lignes" : " ligne"}`), el("span"), el("span", { class: "pb-amt pb-more" }, EUR2.format(v)));
+    }
+    box.append(grid);
+  }
+
+  function renderPatBank() {
+    const box = $("pat-bank"), when = $("pat-bank-when");
+    box.textContent = ""; when.textContent = "";
+    const go = el("button", { class: "go", type: "button" }, "Ouvrir Ma banque →");
+    const m = RL ? bankModel() : null;
+    const last = m && m.releves.length ? m.releves[m.releves.length - 1] : null;
+    if (!last) {
+      box.append(el("p", { class: "pk-empty" }, "Ajoutez vos relevés PDF dans « Ma banque » pour comparer ce qui s'est passé avec votre budget."));
+      go.addEventListener("click", () => setTab("banque"));
+      box.append(go);
+      return;
+    }
+    when.textContent = periodChip(last);
+    const st = periodStats(m, last.id);
+    const plan = planTotals();
+    const dl = el("dl", { class: "pk" });
+    const row = (k, v, cls, prevu, tot) => {
+      const dd = el("dd", { class: [cls, tot ? "tot" : ""].filter(Boolean).join(" ") });
+      if (prevu != null && plan.has) dd.append(el("span", { class: "plan" }, `prévu ${EUR0.format(prevu)}`));
+      dd.append(v);
+      dl.append(el("dt", tot ? { class: "tot" } : {}, k), dd);
+    };
+    row("Entrées", EUR2.format(st.inn), "", plan.inn);
+    row("Dépenses", EUR2.format(st.out), "v-dep", plan.out);
+    if (Math.abs(st.epargne) > 0.004) row("Mis de côté", signed(st.epargne), st.epargne > 0 ? "v-good" : "v-bad", plan.epargne);
+    row("Reste", signed(st.reste), st.reste < 0 ? "v-bad" : "v-good", null, true);
+    box.append(dl);
+    let incV = 0;
+    m.releves.forEach((r) => { m.b.ops.forEach((o) => { if (o.rel === r.id && m.cat.get(o.id) === "c:incidents") incV -= o.montant; }); });
+    if (incV > 0.004) {
+      const n = m.releves.length;
+      box.append(el("p", { class: "pk-alert" }, `${EUR0.format(incV)} de frais d'incident sur ${n > 1 ? `vos ${n} relevés` : "ce relevé"}.`));
+    }
+    go.addEventListener("click", () => { S.bk.rel = last.id; S.bk.ask = null; try { localStorage.setItem("patrimoine-bk-rel", last.id); } catch (e) {} setTab("banque"); });
+    box.append(go);
   }
 
   function renderHistory() {
@@ -673,6 +747,7 @@
 
   /* ---------------- tabs ---------------- */
   function renderTabs() {
+    $("page-title").textContent = TAB_TITLE[S.tab] || "Mon patrimoine";
     TABS.forEach((t) => {
       const on = t === S.tab;
       const b = $("t-" + t);
@@ -695,10 +770,28 @@
     b.addEventListener("click", () => setTab(b.dataset.tab));
     b.addEventListener("keydown", (ev) => {
       const k = TABS.indexOf(S.tab);
-      if (ev.key === "ArrowRight") { ev.preventDefault(); setTab(TABS[(k + 1) % TABS.length], true); }
-      if (ev.key === "ArrowLeft") { ev.preventDefault(); setTab(TABS[(k + TABS.length - 1) % TABS.length], true); }
+      if (ev.key === "ArrowRight" || ev.key === "ArrowDown") { ev.preventDefault(); setTab(TABS[(k + 1) % TABS.length], true); }
+      if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") { ev.preventDefault(); setTab(TABS[(k + TABS.length - 1) % TABS.length], true); }
     });
   });
+
+  /* ---------------- apparence : clair ou sombre ---------------- */
+  const darkMq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+  const themeNow = () => {
+    const t = document.documentElement.dataset.theme;
+    return t === "dark" || t === "light" ? t : darkMq && darkMq.matches ? "dark" : "light";
+  };
+  function renderTheme() {
+    const t = themeNow();
+    document.querySelectorAll("[data-theme-set]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeSet === t)));
+  }
+  document.querySelectorAll("[data-theme-set]").forEach((b) => b.addEventListener("click", () => {
+    document.documentElement.dataset.theme = b.dataset.themeSet;
+    try { localStorage.setItem("patrimoine-theme", b.dataset.themeSet); } catch (e) {}
+    renderTheme();
+  }));
+  if (darkMq && darkMq.addEventListener) darkMq.addEventListener("change", renderTheme);
+  renderTheme();
 
   /* ---------------- budget ---------------- */
   const GROUPS = [["recettes", "Ce qui rentre"], ["depenses", "Ce que je dépense"]];
