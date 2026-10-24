@@ -725,7 +725,7 @@
     const btn = $("ed-save");
     btn.disabled = true;
     try {
-      await S.dbRef.set(next);
+      await persist(S.dbRef.set(next));
       S.doc = next;
       closeEdit();
       render();
@@ -741,7 +741,7 @@
     const releves = { ...S.doc.releves };
     delete releves[k];
     const next = { ...S.doc, releves };
-    try { await S.dbRef.set(next); S.doc = next; S.confirmDel = null; render(); }
+    try { await persist(S.dbRef.set(next)); S.doc = next; S.confirmDel = null; render(); }
     catch (e) { S.confirmDel = null; renderHistory(); }
   }
 
@@ -917,8 +917,8 @@
     const btn = $("bud-save");
     btn.disabled = true;
     try {
-      if (S.dbRef && S.doc) await S.dbRef.update({ budget: next });
-      else if (S.dbRef) await S.dbRef.set({ ...(S.doc || {}), budget: next });
+      if (S.dbRef && S.doc) await persist(S.dbRef.update({ budget: next }));
+      else if (S.dbRef) await persist(S.dbRef.set({ ...(S.doc || {}), budget: next }));
       S.doc = { ...(S.doc || {}), budget: next };
       S.budEditing = false; S.budDraft = null;
       render();
@@ -1314,7 +1314,7 @@
   async function saveBank(nextBank, extra) {
     const next = { ...(S.doc || {}), ...(extra || {}), banque: nextBank };
     try {
-      if (S.dbRef) await S.dbRef.set(next);
+      if (S.dbRef) await persist(S.dbRef.set(next));
       S.doc = next;
       S.loaded = true;
     } catch (e) {
@@ -2032,6 +2032,8 @@
       } catch (e) {
         $("saved-note").textContent = e && e.code === "invalid_argument"
           ? "Simulation : ce montant n'est pas enregistré."
+          : e && e.kept
+          ? NOTE_KEPT
           : "Pas enregistré : réessayez dans un instant.";
       }
     }, 700);
@@ -2072,10 +2074,26 @@
   let EMBED = null;
   try { EMBED = JSON.parse(($("donnees") && $("donnees").textContent) || "null"); } catch (e) { EMBED = null; }
 
-  /** Same calls as the online store, kept in this browser: used by an exported copy opened from a file. */
+  /*STORE-START*/
+  /** Same calls as the online store, kept in this browser.
+   *  The new data is always kept in memory first; if the device refuses to write it,
+   *  the error is reported (reportWrite) and thrown with `kept: true`. */
   function localStore(key, initial) {
     const read = () => { try { const v = JSON.parse(localStorage.getItem(key) || "null"); return v && typeof v === "object" ? v : null; } catch (e) { return null; } };
-    const write = (d) => { try { localStorage.setItem(key, JSON.stringify(d)); } catch (e) {} };
+    const write = (d) => {
+      try {
+        localStorage.setItem(key, JSON.stringify(d));
+      } catch (e) {
+        const quota = !!e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22 || e.code === 1014);
+        const err = new Error("not saved on this device");
+        err.code = quota ? "quota_exceeded" : "storage_failed";
+        err.kept = true;
+        err.cause = e;
+        reportWrite(err);
+        throw err;
+      }
+      reportWrite(null);
+    };
     const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
     const merge = (a, b) => {
       const out = { ...(a || {}) };
@@ -2086,8 +2104,62 @@
     return {
       get doc() { return doc; },
       async set(d) { doc = JSON.parse(JSON.stringify(d)); write(doc); },
-      async update(p) { doc = merge(doc, p); write(doc); S.doc = doc; },
+      async update(p) { doc = merge(doc, p); S.doc = doc; write(doc); },
     };
+  }
+  /** Waits for a store write. A write the device refused is already shown in the warning banner and its data
+   *  is kept in memory, so the caller carries on as if saved; any other error goes up to the caller. */
+  async function persist(write) {
+    try { await write; } catch (e) { if (!(e && e.kept)) throw e; }
+  }
+  /** Adds what the screen shows but may not be written yet: the saving and the target return
+   *  (both are written 700 ms after the last change). Same rule for the backup file and for a retry. */
+  function withPending(data) {
+    if (S.saving != null) data.epargneMensuelle = S.saving;
+    if (S.rate != null) data.rendementCible = S.rate;
+    return data;
+  }
+  /** The backup file: everything in memory, including changes the device did not save. */
+  function backupText() {
+    const data = withPending({ ...S.doc, _export: todayIso() });
+    return { name: `patrimoine-donnees-${todayIso()}.json`, text: JSON.stringify(data, null, 1) };
+  }
+  /** « Réessayer d'enregistrer » : writes exactly what the screen shows, so the waiting
+   *  saving / return writes are no longer needed. If the device refuses again, the banner stays. */
+  async function retrySave() {
+    if (!S.dbRef || !S.doc) return;
+    clearTimeout(S.saveTimer);
+    clearTimeout(S.rateTimer);
+    await persist(S.dbRef.set(withPending({ ...S.doc })));
+    S.doc = S.dbRef.doc;
+  }
+  /*STORE-END*/
+
+  /* --- warning when the device refuses to save --- */
+  const NOTE_KEPT = "Pas enregistré sur l'appareil : voir le message en haut.";
+  function reportWrite(err) {
+    const was = S.unsaved;
+    S.unsaved = err || null;
+    // saved again: the note under the saving lever must not keep saying the opposite
+    const note = $("saved-note");
+    if (!err && was && note && note.textContent === NOTE_KEPT) note.textContent = "Enregistré";
+    const box = $("save-fail");
+    if (!box) return;
+    box.hidden = !err;
+    box.textContent = "";
+    if (!err) return;
+    const why = err.code === "quota_exceeded"
+      ? "l'espace de stockage de l'appareil est plein"
+      : "le stockage de l'appareil est indisponible (navigation privée ou stockage bloqué ?)";
+    const msg = el("span");
+    msg.append(el("b", {}, "Vos derniers changements ne sont pas enregistrés"),
+      ` : ${why}. Ils restent affichés tant que l'app est ouverte. Sauvegardez-les dans un fichier pour ne pas les perdre.`);
+    box.append(msg);
+    const save = el("button", { class: "btn btn-primary", type: "button" }, "Sauvegarder mes données");
+    save.addEventListener("click", () => $("btn-backup").click());
+    const retry = el("button", { class: "btn btn-quiet", type: "button" }, "Réessayer d'enregistrer");
+    retry.addEventListener("click", () => { retrySave(); });
+    box.append(save, retry);
   }
   function showOffline(text) { const o = $("offline"); o.textContent = text; o.hidden = false; }
 
@@ -2151,11 +2223,11 @@
     return out;
   }
   async function applyImport(obj) {
-    await S.dbRef.set(obj);
+    await persist(S.dbRef.set(obj));
     S.doc = S.dbRef.doc;
     S.saving = null; S.rate = null; S.sim = {};
     try { localStorage.removeItem("patrimoine-sim"); } catch (e) {}
-    showNotice("Données importées.", [["OK", hideNotice]]);
+    showNotice(S.unsaved ? "Données importées pour cette session seulement : elles ne sont pas enregistrées sur l'appareil." : "Données importées.", [["OK", hideNotice]]);
     render();
   }
   $("btn-import").addEventListener("click", () => $("file-import").click());
@@ -2174,11 +2246,7 @@
   });
   $("btn-backup").addEventListener("click", async () => {
     if (!S.doc) return;
-    const data = { ...S.doc, _export: todayIso() };
-    if (S.saving != null) data.epargneMensuelle = S.saving;
-    if (S.rate != null) data.rendementCible = S.rate;
-    const text = JSON.stringify(data, null, 1);
-    const name = `patrimoine-donnees-${todayIso()}.json`;
+    const { name, text } = backupText();
     // Android app: write the file, then let the phone's share menu save or send it
     const Cap = window.Capacitor;
     if (Cap && typeof Cap.isNativePlatform === "function" && Cap.isNativePlatform()) {
