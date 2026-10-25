@@ -154,6 +154,7 @@
     rate: null,         // local value while editing the target return
     rateTimer: 0,
     sim: {},            // simulator values the viewer changed
+    undo: null,         // { date } while the data from before the last import can be put back
   };
   const TABS = ["patrimoine", "depenses", "banque", "simulateur"];
   const TAB_TITLE = { patrimoine: "Patrimoine", depenses: "Mes dépenses", banque: "Ma banque", simulateur: "Tester" };
@@ -230,13 +231,19 @@
     return { row: r, ym, rel: S.doc.releves[ym] };
   }
 
+  /** Backup, import and undo: shown by renderHeader, and also when the screen could not be drawn. */
+  function renderDataButtons() {
+    $("btn-import").hidden = !S.app;
+    $("btn-backup").hidden = !(S.app && S.doc);
+    $("btn-undo-import").hidden = !(S.app && S.undo);
+  }
+
   function renderHeader() {
     const L = latest();
     const btn = $("btn-edit");
     btn.hidden = !(S.loaded && S.canWrite !== false && S.tab === "patrimoine");
     $("btn-export").hidden = !(S.downloads && S.doc && !S.offline);
-    $("btn-import").hidden = !S.app;
-    $("btn-backup").hidden = !(S.app && S.doc);
+    renderDataButtons();
     btn.textContent = S.doc ? "Mettre à jour mes soldes" : "Ajouter mes soldes";
     if (S.tab !== "patrimoine") { $("asof").textContent = TAB_SUB[S.tab] || ""; return; }
     if (!S.loaded) { $("asof").textContent = "Vos comptes s'affichent ici dès qu'ils sont chargés."; return; }
@@ -2080,16 +2087,17 @@
    *  the error is reported (reportWrite) and thrown with `kept: true`. */
   function localStore(key, initial) {
     const read = () => { try { const v = JSON.parse(localStorage.getItem(key) || "null"); return v && typeof v === "object" ? v : null; } catch (e) { return null; } };
-    const write = (d) => {
+    // quiet: the caller handles a refusal itself, so the warning banner stays as it was
+    const write = (d, quiet) => {
       try {
         localStorage.setItem(key, JSON.stringify(d));
       } catch (e) {
         const quota = !!e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22 || e.code === 1014);
         const err = new Error("not saved on this device");
         err.code = quota ? "quota_exceeded" : "storage_failed";
-        err.kept = true;
+        err.kept = !quiet;
         err.cause = e;
-        reportWrite(err);
+        if (!quiet) reportWrite(err);
         throw err;
       }
       reportWrite(null);
@@ -2105,6 +2113,9 @@
       get doc() { return doc; },
       async set(d) { doc = JSON.parse(JSON.stringify(d)); write(doc); },
       async update(p) { doc = merge(doc, p); S.doc = doc; write(doc); },
+      /** All or nothing, for an import and its undo: memory changes only once the device has saved it.
+       *  A refusal throws (kept: false) and leaves the data and the warning banner as they were. */
+      async replace(d) { const next = JSON.parse(JSON.stringify(d)); write(next, true); doc = next; S.doc = doc; },
     };
   }
   /** Waits for a store write. A write the device refused is already shown in the warning banner and its data
@@ -2208,6 +2219,15 @@
     o.hidden = false;
   }
   function hideNotice() { $("offline").hidden = true; }
+  /*IMPORT-START*/
+  /** Copy of the data as it was just before the last import, so that import can be undone.
+   *  Two places take turns: a new copy goes in the free one, and the old copy is removed only once
+   *  the import is saved. A failed import then only has to remove its own copy, which never needs
+   *  room, so the copy for the previous import is never rewritten and cannot be lost. */
+  const UNDO_KEYS = ["patrimoine-avant-import", "patrimoine-avant-import-2"];
+  const isPlain = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  const isYm = (v) => typeof v === "string" && /^\d{4}-\d{2}$/.test(v);
+  /** Reads a backup: the .json file, a page exported as .html, or the older { data: … } wrapper. */
   function parseImport(text) {
     let obj = null;
     const t = text.trim();
@@ -2218,31 +2238,229 @@
     }
     if (obj && obj.data && typeof obj.data === "object" && !obj.comptes && !obj.budget) obj = obj.data;
     if (!obj || typeof obj !== "object" || Array.isArray(obj) || (!Array.isArray(obj.comptes) && !obj.budget)) throw new Error("format");
-    const out = { ...obj };
-    delete out._export;
-    return out;
+    const doc = { ...obj };
+    delete doc._export;
+    return { doc, exported: typeof obj._export === "string" ? obj._export : "" };
   }
-  async function applyImport(obj) {
-    await persist(S.dbRef.set(obj));
-    S.doc = S.dbRef.doc;
-    S.saving = null; S.rate = null; S.sim = {};
+  /** What would break the app once this data is saved, in plain words. Empty: the file can be imported.
+   *  Only shapes the app cannot display are refused, so older backups stay accepted. */
+  function checkImport(d) {
+    const bad = [];
+    const no = (msg) => { if (!bad.includes(msg)) bad.push(msg); };
+    const list = (v) => (v == null ? [] : Array.isArray(v) ? v : null);
+    if (d.comptes != null) {
+      if (!Array.isArray(d.comptes)) no("la liste des comptes est illisible");
+      else {
+        const ids = new Set();
+        d.comptes.forEach((c) => {
+          if (!isPlain(c)) { no("un compte est vide ou abîmé"); return; }
+          if (!((typeof c.id === "string" && c.id) || (typeof c.id === "number" && isFinite(c.id)))) no("un compte n'a pas d'identifiant");
+          else if (ids.has(String(c.id))) no("deux comptes ont le même identifiant");
+          else ids.add(String(c.id));
+          if (typeof c.nom !== "string") no("un compte n'a pas de nom");
+          if (c.fermeture && !isYm(c.fermeture)) no("la date de fermeture d'un compte est illisible");
+        });
+      }
+    }
+    if (d.releves != null) {
+      if (!isPlain(d.releves)) no("les soldes mensuels sont illisibles");
+      else Object.entries(d.releves).forEach(([k, r]) => {
+        if (!isYm(k)) no("un mois de soldes a une date illisible");
+        if (!isPlain(r) || (r.soldes != null && !isPlain(r.soldes))) no("un mois de soldes est vide ou abîmé");
+      });
+    }
+    if (d.budget != null) {
+      if (!isPlain(d.budget)) no("le budget est illisible");
+      else ["recettes", "depenses"].forEach((k) => {
+        const l = list(d.budget[k]);
+        if (!l || l.some((x) => !isPlain(x))) no("une ligne du budget est vide ou abîmée");
+      });
+    }
+    if (d.banque != null) {
+      const b = d.banque;
+      if (!isPlain(b)) no("les relevés bancaires sont illisibles");
+      else {
+        const rels = list(b.releves), ops = list(b.ops);
+        const relOk = (r) => isPlain(r) && typeof r.id === "string" && !!r.id && Array.isArray(r.comptes) && r.comptes.every(isPlain)
+          && (r.autres == null || (Array.isArray(r.autres) && r.autres.every(isPlain)));
+        if (!rels || !rels.every(relOk)) no("un relevé bancaire est abîmé");
+        const opOk = (o) => isPlain(o) && typeof o.id === "string" && !!o.id && typeof o.montant === "number" && isFinite(o.montant);
+        if (!ops || !ops.every(opOk)) no("une opération bancaire est abîmée");
+        if (b.regles != null && !isPlain(b.regles)) no("les classements retenus sont illisibles");
+      }
+    }
+    ["epargneMensuelle", "rendementCible", "margeBudget"].forEach((k) => {
+      if (d[k] != null && !isFinite(Number(d[k]))) no("un réglage (épargne, rendement ou marge) est illisible");
+    });
+    // last check: the month-by-month calculation used by every screen
+    if (!bad.length) {
+      try { project(d, Number(d.epargneMensuelle) || 0, "2100-01"); } catch (e) { no("les soldes ne peuvent pas être calculés"); }
+    }
+    return bad;
+  }
+  /** A few counts shown before replacing the data, and the last month with balances. */
+  function importSummary(d) {
+    const months = d && isPlain(d.releves) ? Object.keys(d.releves).filter(isYm).sort() : [];
+    return {
+      comptes: d && Array.isArray(d.comptes) ? d.comptes.length : 0,
+      mois: months.length,
+      last: months[months.length - 1] || "",
+      budget: !!(d && isPlain(d.budget)),
+      releves: d && isPlain(d.banque) && Array.isArray(d.banque.releves) ? d.banque.releves.length : 0,
+    };
+  }
+  const dropKey = (k) => { try { localStorage.removeItem(k); } catch (e) {} };
+  const readKey = (k) => { try { const v = JSON.parse(localStorage.getItem(k) || "null"); return isPlain(v) && isPlain(v.doc) ? v : null; } catch (e) { return null; } };
+  /** The copy that can be put back, and where it is kept. Two copies at once only happen if the device
+   *  refused to remove one: nothing tells which one is right, so none is offered rather than the wrong one. */
+  function findUndo() {
+    const found = UNDO_KEYS.map((key) => ({ key, u: readKey(key) })).filter((x) => x.u);
+    return found.length === 1 ? found[0] : null;
+  }
+  function readUndo() { const f = findUndo(); return f ? f.u : null; }
+  /** Replaces the data with an imported file, after keeping a copy of what the screen shows now.
+   *  Nothing changes unless both are saved: on a refusal the data, the values still waiting to be written
+   *  (and their timers), the warning banner and the copy for the previous import all stay as they were.
+   *  The PDF files are kept apart and are never touched. */
+  async function importDoc(next) {
+    if (!S.dbRef || typeof S.dbRef.replace !== "function") return { ok: false, step: "write" };
+    const old = findUndo();
+    const slot = old && old.key === UNDO_KEYS[0] ? UNDO_KEYS[1] : UNDO_KEYS[0];
+    const copy = S.doc ? { date: todayIso(), doc: withPending({ ...S.doc }) } : null;
+    if (copy) {
+      try { localStorage.setItem(slot, JSON.stringify(copy)); }
+      catch (e) { return { ok: false, step: "copy" }; }
+    }
+    try { await S.dbRef.replace(next); }
+    catch (e) {
+      // only this attempt's copy goes: removing needs no room, and the previous copy was never touched
+      if (copy) dropKey(slot);
+      return { ok: false, step: "write" };
+    }
+    // saved: any other copy belongs to an older state and must not be put back
+    UNDO_KEYS.forEach((k) => { if (!copy || k !== slot) dropKey(k); });
+    clearTimeout(S.saveTimer);
+    clearTimeout(S.rateTimer);
+    S.saving = null; S.rate = null;
+    S.undo = copy ? { date: copy.date } : null;
+    return { ok: true };
+  }
+  /** Puts back the data from before the last import. On a refusal nothing changes and the copy stays. */
+  async function undoImport() {
+    const u = readUndo();
+    if (!u) { S.undo = null; return { ok: false, step: "none" }; }
+    if (!S.dbRef || typeof S.dbRef.replace !== "function") return { ok: false, step: "write" };
+    try { await S.dbRef.replace(u.doc); } catch (e) { return { ok: false, step: "write" }; }
+    clearTimeout(S.saveTimer);
+    clearTimeout(S.rateTimer);
+    S.saving = null; S.rate = null;
+    UNDO_KEYS.forEach(dropKey);
+    S.undo = null;
+    return { ok: true };
+  }
+  /** Tries the whole display with this data, as it will be just after the import (nothing waiting to be
+   *  written, simulator reset), then puts the current data back on screen. The details of « Ma banque »
+   *  are only drawn while its tab is open, so that tab is tried too. Nothing is written meanwhile. */
+  function rendersWith(doc) {
+    const keep = { doc: S.doc, tab: S.tab, saving: S.saving, rate: S.rate, sim: S.sim, rel: S.bk.rel };
+    let ok = true;
+    S.doc = doc; S.saving = null; S.rate = null; S.sim = {};
+    try { ["patrimoine", "banque"].forEach((t) => { S.tab = t; render(); }); } catch (e) { ok = false; }
+    S.doc = keep.doc; S.tab = keep.tab; S.saving = keep.saving; S.rate = keep.rate; S.sim = keep.sim;
+    S.bk.rel = keep.rel;
+    try { render(); } catch (e) {}
+    return ok;
+  }
+  /*IMPORT-END*/
+  function describeImport(got) {
+    const s = importSummary(got.doc);
+    const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
+    const parts = [];
+    if (s.comptes) parts.push(plural(s.comptes, "compte"));
+    if (s.mois) parts.push(`${s.mois} mois de soldes, jusqu'à ${monthLong(s.last)}`);
+    if (s.budget) parts.push("un budget");
+    if (s.releves) parts.push(`${plural(s.releves, "relevé")} de banque`);
+    const d = dateLong(got.exported);
+    let text = `${d ? `Fichier du ${d}` : "Ce fichier"} : ${parts.join(", ") || "aucune donnée"}.`;
+    const cur = importSummary(S.doc);
+    if (s.last && cur.last && s.last < cur.last) text += ` Attention : il s'arrête en ${monthLong(s.last)}, alors que vos données actuelles vont jusqu'en ${monthLong(cur.last)}.`;
+    return text;
+  }
+  let importing = false;
+  async function applyImport(doc) {
+    if (importing) return;
+    importing = true;
+    hideNotice();
+    let r;
+    try { r = await importDoc(doc); } finally { importing = false; }
+    if (!r.ok) {
+      if (r.step === "copy") {
+        showNotice("Import non effectué : l'appareil n'a pas pu garder une copie de vos données actuelles, sans doute faute de place. Vos données sont inchangées. Sauvegardez-les dans un fichier avant de réessayer.",
+          [["Sauvegarder mes données", () => $("btn-backup").click()], ["OK", hideNotice]]);
+      } else showNotice("Import non effectué : l'appareil a refusé d'enregistrer les données du fichier. Vos données actuelles sont inchangées.", [["OK", hideNotice]]);
+      return;
+    }
+    S.sim = {};
     try { localStorage.removeItem("patrimoine-sim"); } catch (e) {}
-    showNotice(S.unsaved ? "Données importées pour cette session seulement : elles ne sont pas enregistrées sur l'appareil." : "Données importées.", [["OK", hideNotice]]);
-    render();
+    if (renderOrWarn("Données importées, mais l'app n'arrive pas à les afficher entièrement."))
+      showNotice("Données importées.", S.undo ? [["OK", hideNotice], ["Annuler l'import", askUndo]] : [["OK", hideNotice]]);
+  }
+  /** Draws the screen. If the saved data cannot be shown, says so and keeps the ways out at hand:
+   *  undo the last import, save the data to a file, import another file. */
+  function renderOrWarn(text) {
+    try { render(); return true; }
+    catch (e) {
+      renderDataButtons();
+      const acts = S.undo ? [["Annuler l'import", askUndo]] : [];
+      if (S.doc) acts.push(["Sauvegarder mes données", () => $("btn-backup").click()]);
+      acts.push(["OK", hideNotice]);
+      showNotice(`${text} ${S.undo ? "Vous pouvez annuler le dernier import." : "Vous pouvez sauvegarder ces données dans un fichier, ou importer un autre fichier."}`, acts);
+      return false;
+    }
+  }
+  function askUndo() {
+    const u = readUndo();
+    if (!u) { S.undo = null; showNotice("Il n'y a pas d'import à annuler.", [["OK", hideNotice]]); renderDataButtons(); return; }
+    const d = dateLong(u.date);
+    showNotice(`Revenir aux données d'avant l'import${d ? ` du ${d}` : ""} ? Les changements faits depuis cet import seront perdus.`,
+      [["Oui, revenir", doUndo], ["Non", hideNotice]]);
+  }
+  async function doUndo() {
+    if (importing) return;
+    importing = true;
+    hideNotice();
+    let r;
+    try { r = await undoImport(); } finally { importing = false; }
+    if (!r.ok) {
+      showNotice(r.step === "none" ? "Il n'y a pas d'import à annuler." : "Annulation impossible : l'appareil a refusé d'enregistrer. Rien n'a changé.", [["OK", hideNotice]]);
+      renderDataButtons();
+      return;
+    }
+    if (renderOrWarn("Import annulé, mais l'app n'arrive pas à afficher ces données entièrement."))
+      showNotice("Import annulé : vos données d'avant l'import sont revenues.", [["OK", hideNotice]]);
   }
   $("btn-import").addEventListener("click", () => $("file-import").click());
+  $("btn-undo-import").addEventListener("click", askUndo);
   $("file-import").addEventListener("change", async (e) => {
     const f = e.target.files && e.target.files[0];
     e.target.value = "";
     if (!f) return;
-    let obj;
-    try { obj = parseImport(await f.text()); }
+    let got;
+    try { got = parseImport(await f.text()); }
     catch (err) {
       showNotice("Ce fichier ne contient pas de données de Mon patrimoine. Choisissez votre fichier de données (.json) ou une page exportée (.html).", [["OK", hideNotice]]);
       return;
     }
-    if (S.doc) showNotice("Remplacer les données de cet appareil par celles du fichier ?", [["Oui, remplacer", () => applyImport(obj)], ["Annuler", hideNotice]]);
-    else applyImport(obj);
+    const bad = checkImport(got.doc);
+    if (!bad.length && !rendersWith(got.doc)) bad.push("l'app n'arrive pas à l'afficher");
+    if (bad.length) {
+      showNotice(`Ce fichier n'a pas été importé : ${bad[0]}. Vos données actuelles sont inchangées.`, [["OK", hideNotice]]);
+      return;
+    }
+    if (S.doc) {
+      showNotice(`${describeImport(got)} Remplacer les données de cet appareil par celles de ce fichier ? Vous pourrez annuler cet import.`,
+        [["Oui, remplacer", () => applyImport(got.doc)], ["Annuler", hideNotice]]);
+    } else applyImport(got.doc);
   });
   $("btn-backup").addEventListener("click", async () => {
     if (!S.doc) return;
@@ -2278,9 +2496,11 @@
       S.app = true;
       S.dbRef = store;
       S.doc = store.doc;
+      const u = readUndo();
+      S.undo = u ? { date: u.date } : null;
       S.loaded = true;
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
-      render();
+      renderOrWarn("Vos données n'arrivent pas à s'afficher entièrement.");
       return;
     }
     const cl = window.claude;

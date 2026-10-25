@@ -43,6 +43,7 @@ try { var th = localStorage.getItem("patrimoine-theme"); if (th === "light" || t
       <p class="side-note">Vos données restent sur cet appareil.</p>
       <button class="btn" id="btn-backup" type="button" hidden>Sauvegarder mes données</button>
       <button class="btn btn-quiet" id="btn-import" type="button" hidden>Importer un fichier</button>
+      <button class="btn btn-quiet" id="btn-undo-import" type="button" hidden>Annuler le dernier import</button>
       <input type="file" id="file-import" accept=".json,.html,application/json,text/html" hidden>
     </div>
   </aside>
