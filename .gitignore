@@ -11,3 +11,7 @@ mobile/android/
 *.pdf
 mes-donnees*.json
 patrimoine-donnees-*.json
+# fichiers de travail locaux, jamais commités
+/AUDIT_MON_PATRIMOINE.md
+/.claude/REPRISE-UI.md
+/.claude/skills/ameliorer/.claude/agents/ui-ux-designer.md
