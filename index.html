@@ -1,11 +1,10 @@
 <!doctype html>
-<html lang="fr">
+<html lang="fr" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="description" content="Mon capital, mon budget du mois et mes simulations. Les données restent sur l'appareil.">
-<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0f1216" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f2ec">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Patrimoine">
@@ -22,19 +21,12 @@ try { var th = localStorage.getItem("patrimoine-theme"); if (th === "light" || t
 </head>
 <body>
 <div class="app" id="app">
-  <aside class="side">
-    <div class="brand">
-      <svg class="brand-mark" width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7"></rect><path d="M7 19l5-6 4 3 5-7"></path></svg>
-      <span>Mon patrimoine</span>
+  <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
+    <div class="dialog-head">
+      <div><span class="eyebrow">VOTRE ESPACE</span><h2 id="settings-title">Préférences &amp; sauvegardes</h2></div>
+      <button type="button" class="round-btn" id="settings-close" aria-label="Fermer les préférences">×</button>
     </div>
-
-    <nav class="tabs" role="tablist" aria-label="Rubriques">
-      <button type="button" role="tab" id="t-patrimoine" data-tab="patrimoine" aria-controls="tab-patrimoine" aria-selected="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"></path><path d="M7 15l4-4 3 3 5-6"></path></svg><span>Patrimoine</span></button>
-      <button type="button" role="tab" id="t-depenses" data-tab="depenses" aria-controls="tab-depenses" aria-selected="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2"></rect><path d="M3 10h18"></path><path d="M16 14h2"></path></svg><span>Mes dépenses</span></button>
-      <button type="button" role="tab" id="t-banque" data-tab="banque" aria-controls="tab-banque" aria-selected="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10l9-6 9 6"></path><path d="M5 10v8M9 10v8M15 10v8M19 10v8"></path><path d="M3 21h18"></path></svg><span>Ma banque</span></button>
-      <button type="button" role="tab" id="t-simulateur" data-tab="simulateur" aria-controls="tab-simulateur" aria-selected="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6"></path><path d="M10 3v6L5 18a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"></path></svg><span>Tester</span></button>
-    </nav>
-
+    <p class="settings-intro">Vos chiffres restent sur cet appareil. Pour changer d'appareil, sauvegardez vos données puis importez le fichier sur l'autre appareil. Les relevés PDF restent à part.</p>
     <div class="side-foot">
       <div class="seg seg-theme" role="group" aria-label="Apparence">
         <button type="button" data-theme-set="light" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>Clair</button>
@@ -46,13 +38,34 @@ try { var th = localStorage.getItem("patrimoine-theme"); if (th === "light" || t
       <button class="btn btn-quiet" id="btn-undo-import" type="button" hidden>Annuler le dernier import</button>
       <input type="file" id="file-import" accept=".json,.html,application/json,text/html" hidden>
     </div>
-  </aside>
+  </dialog>
 
   <div class="main">
   <div class="main-in">
+  <div class="masthead">
+    <a class="wordmark" id="wordmark" href="#patrimoine" aria-label="Mon patrimoine, accueil">mon patrimoine<span class="wordmark-dot">.</span></a>
+    <div class="tabs-wrap">
+      <nav class="tabs" role="tablist" aria-label="Rubriques">
+        <button type="button" role="tab" id="t-patrimoine" data-tab="patrimoine" aria-controls="tab-patrimoine" aria-selected="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"></path><path d="M7 15l4-4 3 3 5-6"></path></svg><span>Vue globale</span></button>
+        <button type="button" role="tab" id="t-depenses" data-tab="depenses" aria-controls="tab-depenses" aria-selected="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2"></rect><path d="M3 10h18"></path><path d="M16 14h2"></path></svg><span>Budget</span></button>
+        <button type="button" role="tab" id="t-banque" data-tab="banque" aria-controls="tab-banque" aria-selected="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10l9-6 9 6"></path><path d="M5 10v8M9 10v8M15 10v8M19 10v8"></path><path d="M3 21h18"></path></svg><span>Banque</span></button>
+        <button type="button" role="tab" id="t-simulateur" data-tab="simulateur" aria-controls="tab-simulateur" aria-selected="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6"></path><path d="M10 3v6L5 18a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"></path></svg><span>Projets</span></button>
+      </nav>
+    </div>
+    <div class="mast-right">
+      <span class="private-pill"><i></i>Espace personnel</span>
+      <div class="profile" id="profile">
+        <button type="button" class="avatar" id="avatar-settings" aria-label="Profil MP" aria-expanded="false" aria-controls="profile-pop">MP</button>
+        <div class="profile-pop" id="profile-pop" hidden>
+          <button type="button" id="settings-open"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M5.6 18.4l2.1-2.1m8.6-8.6 2.1-2.1"></path><circle cx="12" cy="12" r="4"></circle></svg>Réglages</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <header class="head">
     <div>
-      <h1 id="page-title">Patrimoine</h1>
+      <span class="section-label">LE TEMPS JOUE POUR VOUS</span>
+      <h1 id="page-title">Votre argent, en perspective.</h1>
       <p id="asof">Vos comptes s'affichent ici dès qu'ils sont chargés.</p>
     </div>
     <div class="head-actions">
@@ -64,28 +77,50 @@ try { var th = localStorage.getItem("patrimoine-theme"); if (th === "light" || t
   <p class="offline" id="offline" hidden></p>
   <div class="bk-msg warn" id="save-fail" role="alert" hidden></div>
 
+  <section class="welcome" id="welcome" hidden>
+    <div>
+      <span class="eyebrow">BIENVENUE CHEZ VOUS</span>
+      <h2>Tout votre argent.<br>Une perspective plus claire.</h2>
+      <p>Retrouvez vos comptes, votre budget et vos relevés dans un même espace. Commencez avec vos soldes ou une sauvegarde de Mon patrimoine.</p>
+      <div class="actions">
+        <button type="button" id="welcome-start" class="btn btn-primary">Ajouter mes comptes <span aria-hidden="true">↗</span></button>
+        <button type="button" id="welcome-import" class="btn">Importer ma sauvegarde</button>
+      </div>
+    </div>
+    <div class="welcome-art" aria-hidden="true"><i></i><i></i><i></i><span>mp.</span></div>
+  </section>
+
   <div class="panel" id="tab-patrimoine" role="tabpanel" aria-labelledby="t-patrimoine">
 
-  <section class="figures" aria-label="Chiffres clés">
-    <div class="fig">
-      <span class="eyebrow">Aujourd'hui</span>
-      <span class="big" id="k-total">—</span>
-      <span class="sub" id="k-total-sub">sur vos comptes</span>
+  <section class="overview kpis" aria-label="Chiffres clés">
+    <div class="kpi kpi-total">
+      <span class="kpi-label">PATRIMOINE TOTAL</span>
+      <span class="kpi-value" id="k-total">—</span>
+      <span class="kpi-sub" id="k-total-sub">sur vos comptes</span>
     </div>
-    <div class="fig">
-      <span class="eyebrow">Ce que ça rapporte tout seul</span>
-      <span class="big" id="k-passif">—</span>
-      <span class="sub" id="k-passif-sub">par mois</span>
+    <div class="kpi">
+      <span class="kpi-ico" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v4"></path><path d="M4 7.5V17a2 2 0 0 0 2 2h14V9H6.5A2.5 2.5 0 0 1 4 7.5z"></path><circle cx="16" cy="14" r="1"></circle></svg></span>
+      <span class="kpi-label">Disponible après épargne</span>
+      <span class="kpi-value" id="k-left">—</span>
+      <span class="kpi-sub" id="k-left-sub">par mois, après épargne</span>
     </div>
-    <div class="fig">
-      <span class="eyebrow" id="k-horizon-label">À 27 ans</span>
-      <span class="big key-avec" id="k-horizon">—</span>
-      <span class="sub" id="k-horizon-sub">avec votre épargne mensuelle</span>
+    <div class="kpi">
+      <span class="kpi-ico" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><path d="M5 20v-5M10 20v-8M15 20v-11"></path><path d="M4 9l5-4 4 3 6-5"></path><path d="M16 3h3v3"></path></svg></span>
+      <span class="kpi-label">Intérêts estimés</span>
+      <span class="kpi-value" id="k-passif">—</span>
+      <span class="kpi-sub" id="k-passif-sub">par mois</span>
     </div>
-    <div class="fig">
-      <span class="eyebrow">Il me reste pour vivre</span>
-      <span class="big" id="k-left">—</span>
-      <span class="sub" id="k-left-sub">par mois, après épargne</span>
+    <div class="kpi">
+      <span class="kpi-ico" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><path d="M5 11c0-3.3 3.1-6 7-6s7 2.7 7 6-3.1 6-7 6-7-2.7-7-6z"></path><path d="M10 8h4"></path><path d="M8 16l-1 3M16 16l1 3"></path><path d="M19 10h1.5"></path></svg></span>
+      <span class="kpi-label">Épargne mensuelle</span>
+      <span class="kpi-value" id="k-saving">—</span>
+      <span class="kpi-sub" id="saving-ratio">Votre rythme</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-ico" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"></rect><path d="M3 10h18"></path><path d="M7 15h3"></path></svg></span>
+      <span class="kpi-label">Comptes</span>
+      <span class="kpi-value" id="k-accounts">—</span>
+      <span class="kpi-sub" id="k-accounts-sub">comptes suivis</span>
     </div>
   </section>
 
@@ -106,103 +141,107 @@ try { var th = localStorage.getItem("patrimoine-theme"); if (th === "light" || t
     </div>
   </section>
 
-  <div class="pat-grid">
-    <section class="card" aria-labelledby="chart-title">
-      <div class="chart-top">
-        <h2 id="chart-title">Mon capital mois par mois</h2>
-        <div class="seg-row">
-          <div class="seg" role="group" aria-label="Ce que montre le graphique">
-            <button type="button" data-view="capital" aria-pressed="true">Capital</button>
-            <button type="button" data-view="passif" aria-pressed="false">Ce que ça rapporte</button>
-          </div>
-          <div class="seg" role="group" aria-label="Jusqu'à quel âge">
-            <button type="button" data-age="27" aria-pressed="true">27 ans</button>
-            <button type="button" data-age="30" aria-pressed="false">30 ans</button>
-            <button type="button" data-age="35" aria-pressed="false">35 ans</button>
-          </div>
-        </div>
-      </div>
-      <div class="legend" id="legend">
-        <span><i class="sw avec"></i><span id="lg-avec">Avec 150 € par mois</span></span>
-        <span><i class="sw sans"></i>Sans rien ajouter</span>
-        <span><i class="sw-dot"></i>Vos relevés</span>
-      </div>
-      <div class="chart" id="chart">
-        <div class="empty" id="chart-empty">
-          <span>La courbe de votre capital apparaît ici dès que vos soldes sont chargés.</span>
-        </div>
-      </div>
-      <details class="years" id="years">
-        <summary>Voir les chiffres année par année</summary>
-        <div class="tscroll"><table id="years-table"></table></div>
-      </details>
-    </section>
+  <section class="card docs-panel" aria-labelledby="docs-title">
+    <div class="panel-head">
+      <div><h2 id="docs-title">Vos derniers documents</h2><span class="docs-sub">Vos relevés, accessibles au même endroit</span></div>
+      <button type="button" class="panel-link" id="docs-open-bank">Ouvrir Banque <span aria-hidden="true">→</span></button>
+    </div>
+    <div class="docs-list" id="docs-list"></div>
+    <p class="docs-msg" id="docs-msg" role="status"></p>
+    <p class="docs-foot" id="docs-foot" hidden>Documents conservés sur cet appareil.</p>
+  </section>
 
-    <div class="pat-side">
-      <section class="card lever" aria-labelledby="save-title">
-        <h2 id="save-title">Je mets de côté chaque mois</h2>
-        <span class="stepper">
-          <button type="button" id="save-minus" aria-label="Moins 10 €">−</button>
-          <input id="save-num" type="number" inputmode="decimal" min="0" step="5" value="150" aria-label="Montant mis de côté chaque mois, en euros">
-          <button type="button" id="save-plus" aria-label="Plus 10 €">+</button>
-        </span>
-        <input id="save-range" type="range" min="0" max="400" step="5" value="150" aria-label="Montant mis de côté chaque mois">
-        <p class="left" id="left">Il me reste pour vivre <b>—</b></p>
-        <span class="saved-note" id="saved-note"></span>
-      </section>
-
-      <section class="card" aria-labelledby="acc-title">
-        <h2 id="acc-title">Mes comptes</h2>
+  <div class="pat-grid lower-grid">
+    <div class="lower-col">
+      <section class="card accounts-panel" aria-labelledby="acc-title">
+        <div class="panel-head">
+          <h2 id="acc-title">Mes comptes <span class="muted">/ répartition</span></h2>
+          <button type="button" class="panel-link" id="manage-accounts">Gérer mes comptes <span aria-hidden="true">→</span></button>
+        </div>
         <div class="acc-list" id="acc-list"></div>
+      </section>
+      <section class="card last-bank-panel" aria-labelledby="pk-title">
+        <div class="card-head bilan-head">
+          <div><h2 id="pk-title">Dernier relevé</h2><span class="bilan-period" id="pat-bank-when"></span></div>
+          <svg class="ic bilan-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path><path d="M9 13h6"></path><path d="M9 17h4"></path></svg>
+        </div>
+        <div class="pat-bank" id="pat-bank"></div>
+      </section>
+    </div>
+    <div class="lower-col">
+      <section class="card month-panel" aria-labelledby="pb-title">
+        <div class="panel-head">
+          <div><h2 id="pb-title">Mon budget du mois</h2><span class="month-sub" id="month-caption"></span></div>
+          <div class="month-total"><span class="month-total-label">Rentrées</span><span id="cash-income">—</span></div>
+          <span class="card-meta" id="pat-bud-sum"></span>
+        </div>
+        <div class="cash-flow">
+          <div class="flow-bar" role="img" id="flow-bar" aria-label="Répartition de vos rentrées du mois"><i id="flow-spending"></i><i id="flow-saving"></i></div>
+          <div class="flow-labels">
+            <span><i></i>Dépenses<b id="cash-spending">—</b></span>
+            <span><i></i>Épargne<b id="cash-saving">—</b></span>
+            <span id="cash-left-item"><i></i>Disponible<b id="cash-left">—</b></span>
+          </div>
+        </div>
+        <div id="pat-bud"></div>
+        <button type="button" class="panel-link" id="open-budget">Voir tout mon budget <span aria-hidden="true">→</span></button>
+      </section>
+      <section class="card" aria-labelledby="hist-title" id="hist-card" hidden>
+        <h2 id="hist-title">Mes relevés de soldes</h2>
+        <div class="hist" id="hist"></div>
       </section>
     </div>
   </div>
-
-  <div class="pat-grid">
-    <section class="card" aria-labelledby="pb-title">
-      <div class="card-head">
-        <h2 id="pb-title">Mon budget du mois</h2>
-        <span class="card-meta" id="pat-bud-sum"></span>
-      </div>
-      <div id="pat-bud"></div>
-    </section>
-    <section class="card" aria-labelledby="pk-title">
-      <div class="card-head">
-        <h2 id="pk-title">Dernier relevé</h2>
-        <span class="card-meta" id="pat-bank-when"></span>
-      </div>
-      <div class="pat-bank" id="pat-bank"></div>
-    </section>
-  </div>
-
-  <section class="card" aria-labelledby="hist-title" id="hist-card" hidden>
-    <h2 id="hist-title">Mes relevés de soldes</h2>
-    <div class="hist" id="hist"></div>
-  </section>
-
-  <section class="notes" aria-label="Comment c'est calculé">
-    <p>Trait plein : la même chose en ajoutant chaque mois le montant mis de côté. Pointillés : vos comptes tels qu'ils sont, avec seulement leurs intérêts.</p>
-    <p>L'épargne va d'abord sur le Livret Jeune jusqu'à son plafond de versements, puis sur le Livret Bleu. À la fermeture du Livret Jeune, son solde passe sur le Livret Bleu.</p>
-    <p>Les intérêts sont ajoutés chaque mois au taux de chaque compte. En vrai, les livrets les versent une fois par an, en janvier.</p>
-  </section>
   </div>
 
   <div class="panel" id="tab-depenses" role="tabpanel" aria-labelledby="t-depenses" hidden>
-    <section class="figures" aria-label="Mon mois">
-      <div class="fig">
-        <span class="eyebrow">Ce qui rentre</span>
-        <span class="big" id="b-in">—</span>
-        <span class="sub" id="b-in-sub">par mois</span>
+    <section class="overview kpis budget-kpis" aria-label="Mon mois">
+      <div class="kpi">
+        <span class="kpi-ico" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><path d="M5 20v-5M10 20v-8M15 20v-11"></path><path d="M4 9l5-4 4 3 6-5"></path><path d="M16 3h3v3"></path></svg></span>
+        <span class="kpi-label">Ce qui rentre</span>
+        <span class="kpi-value" id="b-in">—</span>
+        <span class="kpi-sub" id="b-in-sub">par mois</span>
       </div>
-      <div class="fig">
-        <span class="eyebrow">Ce que je dépense</span>
-        <span class="big" id="b-out">—</span>
-        <span class="sub" id="b-out-sub">par mois</span>
+      <div class="kpi">
+        <span class="kpi-ico" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"></rect><path d="M3 10h18"></path><path d="M7 15h3"></path></svg></span>
+        <span class="kpi-label">Ce que je dépense</span>
+        <span class="kpi-value" id="b-out">—</span>
+        <span class="kpi-sub" id="b-out-sub">par mois</span>
       </div>
-      <div class="fig">
-        <span class="eyebrow">Ce qu'il me reste</span>
-        <span class="big key-avec" id="b-rest">—</span>
-        <span class="sub" id="b-rest-sub">par mois</span>
+      <div class="kpi">
+        <span class="kpi-ico" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><path d="M5 11c0-3.3 3.1-6 7-6s7 2.7 7 6-3.1 6-7 6-7-2.7-7-6z"></path><path d="M10 8h4"></path><path d="M8 16l-1 3M16 16l1 3"></path><path d="M19 10h1.5"></path></svg></span>
+        <span class="kpi-label">Mis de côté</span>
+        <span class="kpi-value" id="b-saving">—</span>
+        <span class="kpi-sub" id="b-saving-sub">par mois</span>
+      </div>
+      <div class="kpi kpi-total kpi-left">
+        <span class="kpi-label">DISPONIBLE APRÈS ÉPARGNE</span>
+        <span class="kpi-value key-avec" id="b-left">—</span>
+        <span class="kpi-sub" id="b-left-sub">par mois, après épargne</span>
+      </div>
+    </section>
+
+    <section class="card month-panel budget-panel" aria-labelledby="bud-title">
+      <div class="panel-head">
+        <div><h2 id="bud-title">Mon budget du mois</h2><span class="month-sub">Ce qui rentre, réparti chaque mois</span></div>
+        <button class="btn" type="button" id="bud-edit-btn" hidden>Modifier mes lignes</button>
+      </div>
+      <div class="cash-flow">
+        <div class="flow-bar" role="img" aria-label="Répartition de vos rentrées du mois"><i id="b-flow-spending"></i><i id="b-flow-saving"></i></div>
+        <div class="flow-labels">
+          <span><i></i>Dépenses<b id="b-cash-spending">—</b></span>
+          <span><i></i>Épargne<b id="b-cash-saving">—</b></span>
+          <span id="b-cash-left-item"><i></i>Disponible<b id="b-cash-left">—</b></span>
+        </div>
+      </div>
+      <div id="bud-view" class="bud-grid"></div>
+      <div id="bud-edit" hidden>
+        <div class="bud-grid" id="bud-edit-grid"></div>
+        <div class="actions" style="margin-top:12px">
+          <button class="btn btn-primary" type="button" id="bud-save">Enregistrer</button>
+          <button class="btn" type="button" id="bud-cancel">Annuler</button>
+          <span class="err" id="bud-err" role="alert"></span>
+        </div>
       </div>
     </section>
 
@@ -216,22 +255,6 @@ try { var th = localStorage.getItem("patrimoine-theme"); if (th === "light" || t
       </p>
       <div class="progress" id="free-bar" aria-hidden="true"><i style="width:0%"></i></div>
       <div class="facts" id="free-facts"></div>
-    </section>
-
-    <section class="card" aria-labelledby="bud-title">
-      <div class="bud-head">
-        <h2 id="bud-title">Mon budget du mois</h2>
-        <button class="btn" type="button" id="bud-edit-btn" hidden>Modifier mes lignes</button>
-      </div>
-      <div id="bud-view" class="bud-grid"></div>
-      <div id="bud-edit" hidden>
-        <div class="bud-grid" id="bud-edit-grid"></div>
-        <div class="actions" style="margin-top:12px">
-          <button class="btn btn-primary" type="button" id="bud-save">Enregistrer</button>
-          <button class="btn" type="button" id="bud-cancel">Annuler</button>
-          <span class="err" id="bud-err" role="alert"></span>
-        </div>
-      </div>
     </section>
   </div>
 
@@ -359,8 +382,21 @@ try { var th = localStorage.getItem("patrimoine-theme"); if (th === "light" || t
   </div>
 
   <div class="panel" id="tab-simulateur" role="tabpanel" aria-labelledby="t-simulateur" hidden>
+    <section class="card lever lever-card" aria-labelledby="save-title">
+      <h2 id="save-title">Mon épargne mensuelle</h2>
+      <p class="lever-intro">Ce que vous mettez de côté chaque mois. Un petit geste, une différence dans le temps.</p>
+      <span class="stepper">
+        <button type="button" id="save-minus" aria-label="Moins 10 €">−</button>
+        <input id="save-num" type="number" inputmode="decimal" min="0" step="5" value="150" aria-label="Montant mis de côté chaque mois, en euros">
+        <button type="button" id="save-plus" aria-label="Plus 10 €">+</button>
+      </span>
+      <input id="save-range" type="range" min="0" max="400" step="5" value="150" aria-label="Montant mis de côté chaque mois">
+      <p class="left" id="left">Il me reste pour vivre <b>—</b></p>
+      <span class="saved-note" id="saved-note"></span>
+    </section>
+
     <section class="card" aria-labelledby="sim-title">
-      <h2 id="sim-title">Tester : combien il me faudrait placé ?</h2>
+      <h2 id="sim-title">Et si vos placements finançaient votre quotidien ?</h2>
       <div class="sim-inputs">
         <label class="field">Je dépense par mois
           <span class="in"><input type="number" id="sim-dep" min="0" step="10" inputmode="decimal"><span>€</span></span>
@@ -415,6 +451,10 @@ try { var th = localStorage.getItem("patrimoine-theme"); if (th === "light" || t
     </section>
   </div>
 
+  <footer class="app-footer">
+    <span>MON PATRIMOINE <i>·</i> Votre argent, à votre façon.</span>
+    <div><span id="data-status">Données sur cet appareil</span></div>
+  </footer>
   </div>
   </div>
 </div>

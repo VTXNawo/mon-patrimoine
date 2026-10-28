@@ -157,7 +157,7 @@
     undo: null,         // { date } while the data from before the last import can be put back
   };
   const TABS = ["patrimoine", "depenses", "banque", "simulateur"];
-  const TAB_TITLE = { patrimoine: "Patrimoine", depenses: "Mes dépenses", banque: "Ma banque", simulateur: "Tester" };
+  const TAB_TITLE = { patrimoine: "Votre argent, en perspective.", depenses: "Un mois bien pensé.", banque: "Chaque mouvement compte.", simulateur: "Faites de la place à vos projets." };
   const TAB_SUB = {
     depenses: "Ce qui rentre et ce qui sort chaque mois, d'après votre budget",
     banque: "Vos relevés du Crédit Mutuel comparés à votre budget",
@@ -191,7 +191,6 @@
   const ageNow = () => Math.floor((nowIdx() - birthIdx()) / 12);
   const reach = (n) => { const t = nowIdx() + n; return { ym: toYm(t), age: Math.floor((t - birthIdx()) / 12) }; };
   try { const a = Number(localStorage.getItem("patrimoine-age")); if ([27, 30, 35].includes(a)) S.age = a; } catch (e) {}
-  try { const v = localStorage.getItem("patrimoine-view"); if (v === "capital" || v === "passif") S.view = v; } catch (e) {}
 
   const saving = () => (S.saving != null ? S.saving : Number(S.doc && S.doc.epargneMensuelle) || 0);
   const endYm = () => {
@@ -206,22 +205,18 @@
     S.proj = has ? project(doc, saving(), endYm()) : null;
     renderHeader();
     renderFigures();
+    renderAtelier();
     renderLever();
-    renderChart();
-    renderYears();
     renderAccounts();
     renderPatBudget();
     renderPatBank();
+    renderPatDocs();
     renderHistory();
     renderTabs();
     renderBudget();
     renderFreedom();
     renderSim();
     renderBank();
-    document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === S.view)));
-    document.querySelectorAll("[data-age]").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.age) === S.age)));
-    $("chart-title").textContent = S.view === "capital" ? "Mon capital mois par mois" : "Ce que mon argent rapporte tout seul, par mois";
-    $("lg-avec").textContent = `Avec ${EUR0.format(saving())} par mois`;
   }
 
   function latest() {
@@ -252,42 +247,143 @@
         ? "Aucune donnée sur cet appareil. Importez votre fichier de données, ou ajoutez vos soldes."
         : S.noDb
         ? "Vos comptes n'ont pas pu être chargés sur cet affichage."
-        : "Aucun solde pour l'instant. Ajoutez vos soldes du mois pour voir vos courbes.";
+        : "Aucun solde pour l'instant. Ajoutez vos soldes du mois pour voir vos comptes.";
       return;
     }
     const d = dateLong(L.rel && L.rel.date);
-    $("asof").textContent = `${d ? "Soldes au " + d : "Soldes de " + monthLong(L.ym)} · ${S.proj.comptes.length} comptes`;
+    const n = S.proj.comptes.length;
+    $("asof").textContent = `${d ? "Soldes au " + d : "Soldes de " + monthLong(L.ym)} · ${n} compte${n === 1 ? "" : "s"}`;
+  }
+
+  /*ATELIER-START*/
+  /** The month at a glance, from the budget totals and the saving shown on screen. The bar widths are
+   *  percentages of the larger of « what comes in » and « spending + saving », so the bar never overflows. */
+  function cashFlow(totals, savingAmt) {
+    if (!totals) return null;
+    const base = Math.max(1, totals.recettes, totals.depenses + savingAmt);
+    const pct = (v) => Math.max(0, Math.min(100, (v / base) * 100));
+    return {
+      income: totals.recettes, spending: totals.depenses, saving: savingAmt, left: totals.reste - savingAmt,
+      wSpending: pct(totals.depenses), wSaving: pct(savingAmt),
+      ratio: totals.recettes > 0 ? Math.round((savingAmt / totals.recettes) * 100) : null,
+    };
+  }
+  /** The « Comptes » card: how many accounts are followed, and how many are below zero. */
+  function accountsSummary(balances) {
+    const list = Array.isArray(balances) ? balances : [];
+    const negative = list.filter((v) => Number(v) < 0).length;
+    return {
+      count: list.length,
+      label: list.length === 1 ? "compte suivi" : "comptes suivis",
+      negative,
+      negativeLabel: negative ? `${negative} solde${negative > 1 ? "s" : ""} négatif${negative > 1 ? "s" : ""}` : "",
+    };
+  }
+  /** Which icon an account gets: from its type, or from its name when it has no type. Display only. */
+  function accountKind(c) {
+    const s = String((c && (c.type || c.nom)) || "").toLowerCase();
+    if (/courant|chèque|cheque|eurocompte/.test(s)) return "courant";
+    if (/livret|ldds?\b|\blep\b|\bpel\b|\bcel\b|épargne|epargne/.test(s)) return "livret";
+    if (/\bpea\b|bourse|titres|actions/.test(s)) return "bourse";
+    if (/assurance|retraite|\bper\b/.test(s)) return "assurance";
+    return "autre";
+  }
+  /** Part of an account in the total, as on the accounts bar: positive balances only.
+   *  null when the account takes no room (zero or negative balance, or nothing to share). */
+  function accountShare(balances, i) {
+    const total = balances.reduce((t, v) => t + Math.max(0, Number(v) || 0), 0);
+    const v = Number(balances[i]) || 0;
+    return total > 0 && v > 0 ? v / total : null;
+  }
+  /** « Vos derniers documents » : the bank statements whose PDF is kept on this device, newest first
+   *  (by end of period, then by import date). Reads the list only: nothing is changed or removed. */
+  function recentDocs(releves, max) {
+    return (Array.isArray(releves) ? releves : [])
+      .filter((r) => r && r.pdf === true && typeof r.fin === "string" && r.fin)
+      .slice()
+      .sort((a, b) => (a.fin !== b.fin ? (a.fin < b.fin ? 1 : -1) : String(b.importe || "").localeCompare(String(a.importe || ""))))
+      .slice(0, max);
+  }
+  /** Title of the latest-statement card: « Bilan de septembre » from the end date of the statement
+   *  (« Bilan d'avril », « Bilan d'août », « Bilan d'octobre »). Unknown date: « Dernier relevé ». */
+  function bilanTitle(fin) {
+    const m = /^\d{4}-(\d{2})-\d{2}$/.exec(fin || "");
+    const name = m ? MONTHS[+m[1] - 1] : "";
+    if (!name) return "Dernier relevé";
+    return /^[aeiouyàâéèêîôû]/.test(name) ? `Bilan d'${name}` : `Bilan de ${name}`;
+  }
+  /** Is the budget filled in? A budget object with at least one line (even at 0 €) in « recettes » or « depenses »;
+   *  with no budget object, the old « margeBudget » field when it holds a number. Reads only. */
+  function hasBudget(doc) {
+    if (!doc || typeof doc !== "object") return false;
+    const b = doc.budget;
+    if (b && typeof b === "object") return [b.recettes, b.depenses].some((a) => Array.isArray(a) && a.length > 0);
+    const m = doc.margeBudget;
+    return (typeof m === "number" || (typeof m === "string" && m.trim() !== "")) && isFinite(Number(m));
+  }
+  /** « Disponible après épargne » card, same rule on Vue globale, Budget and Projets: the month margin minus the saving,
+   *  even when it is zero or below; red when below zero (neg), warning from 0 to under 50 € (low).
+   *  « — » only when the budget is not filled in. */
+  function leftCard(marge, savingAmt, filled) {
+    if (!filled) return { text: "—", low: false, neg: false, sub: "remplissez « Budget »" };
+    const rest = marge - savingAmt;
+    return { text: EUR2.format(rest), low: rest >= 0 && rest < 50, neg: rest < 0, sub: `par mois, après ${EUR0.format(savingAmt)} d'épargne` };
+  }
+  /*ATELIER-END*/
+
+  /** Overview extras: saving, the month bar, the welcome block and the data status. */
+  function renderAtelier() {
+    const doc = S.doc;
+    $("welcome").hidden = !S.loaded || !!doc;
+    $("welcome-import").hidden = !S.app;
+    $("welcome-start").hidden = S.canWrite === false;
+    $("manage-accounts").hidden = !(S.loaded && S.canWrite !== false);
+    $("k-saving").textContent = doc ? EUR0.format(saving()) : "—";
+    const f = cashFlow(budgetTotals(doc), saving());
+    $("saving-ratio").textContent = f && f.ratio != null ? `${f.ratio} % de vos revenus` : "par mois";
+    $("month-caption").textContent = monthLong(thisMonth());
+    [["cash-income", "income"], ["cash-spending", "spending"], ["cash-saving", "saving"], ["cash-left", "left"]]
+      .forEach(([id, k]) => { $(id).textContent = f ? EUR0.format(f[k]) : "—"; });
+    $("cash-left-item").classList.toggle("v-bad", !!f && f.left < 0);
+    $("flow-spending").style.width = `${f ? f.wSpending : 0}%`;
+    $("flow-saving").style.width = `${f ? f.wSaving : 0}%`;
+    renderDataStatus();
+  }
+  /** Shows a « Disponible après épargne » card (value id, and its « -sub » line) from leftCard. */
+  function paintLeft(id, c) {
+    const v = $(id);
+    v.textContent = c.text;
+    v.classList.toggle("low", c.low);
+    v.classList.toggle("v-bad", c.neg);
+    $(`${id}-sub`).textContent = c.sub;
+  }
+  function renderDataStatus() {
+    $("data-status").textContent = S.unsaved ? "Changements pas encore enregistrés sur l'appareil" : S.app ? "Données sur cet appareil" : "";
   }
 
   function renderFigures() {
     const L = latest();
-    const marge = margeMois(), kl = $("k-left");
-    if (marge > 0) {
-      const rest = marge - saving();
-      kl.textContent = EUR2.format(rest);
-      kl.classList.toggle("low", rest < 50);
-      $("k-left-sub").textContent = `par mois, après ${EUR0.format(saving())} d'épargne`;
-    } else {
-      kl.textContent = "—";
-      kl.classList.remove("low");
-      $("k-left-sub").textContent = "remplissez « Mes dépenses »";
-    }
+    paintLeft("k-left", leftCard(margeMois(), saving(), hasBudget(S.doc)));
+    const ka = $("k-accounts"), kaSub = $("k-accounts-sub");
     if (!L) {
-      ["k-total", "k-passif", "k-horizon"].forEach((id) => { $(id).textContent = "—"; });
+      ["k-total", "k-passif", "k-accounts"].forEach((id) => { $(id).textContent = "—"; });
+      $("k-total-sub").textContent = "sur vos comptes";
+      $("k-passif-sub").textContent = "par mois";
+      kaSub.textContent = "comptes suivis";
+      kaSub.classList.remove("low");
       return;
     }
+    const acc = accountsSummary(L.row.sansParts);
     $("k-total").textContent = EUR2.format(L.row.sans);
-    $("k-total-sub").textContent = `sur ${S.proj.comptes.length} comptes`;
+    $("k-total-sub").textContent = `sur ${acc.count} compte${acc.count === 1 ? "" : "s"}`;
+    ka.textContent = String(acc.count);
+    // the old accounts ring was the only hint on this screen that a balance is below zero
+    kaSub.textContent = acc.negative ? `${acc.label} · ${acc.negativeLabel}` : acc.label;
+    kaSub.classList.toggle("low", acc.negative > 0);
     const p = $("k-passif");
     p.textContent = "";
     p.append(EUR2.format(L.row.sansPassif), el("small", {}, " /mois"));
     $("k-passif-sub").textContent = `soit ${EUR2.format(L.row.sansPassif * 12)} par an`;
-    const end = S.proj.rows[S.proj.rows.length - 1];
-    $("k-horizon-label").textContent = `À ${S.age} ans (${monthLong(end.ym)})`;
-    $("k-horizon").textContent = eur(end.avec);
-    const sub = $("k-horizon-sub");
-    sub.textContent = "";
-    sub.append(`avec ${EUR0.format(saving())} par mois · `, el("b", {}, eur(end.sans)), " sans rien ajouter");
   }
 
   function renderLever() {
@@ -299,214 +395,23 @@
     rng.value = String(v);
     const left = $("left");
     left.textContent = "";
-    if (marge > 0) {
-      const rest = marge - v;
-      left.append("Il me reste pour vivre ", el("b", {}, EUR2.format(rest)), ` par mois, sur les ${EUR2.format(marge)} qui restent après mes dépenses`);
-      left.classList.toggle("low", rest < 50);
-    } else {
-      left.append("Remplissez l'onglet « Mes dépenses » pour voir ce qu'il vous reste pour vivre.");
-      left.classList.remove("low");
-    }
+    const filled = hasBudget(S.doc);
+    const c = leftCard(marge, v, filled);
+    if (!filled) left.append("Remplissez l'onglet « Budget » pour voir ce qu'il vous reste pour vivre.");
+    else if (marge > 0) left.append("Il me reste pour vivre ", el("b", {}, c.text), ` par mois, sur les ${EUR2.format(marge)} qui restent après mes dépenses`);
+    else left.append("Il me reste pour vivre ", el("b", {}, c.text), " par mois : mes dépenses prévues atteignent ou dépassent déjà mes rentrées.");
+    left.classList.toggle("low", c.low);
+    left.classList.toggle("v-bad", c.neg);
     const note = $("saved-note");
     if (S.canWrite === false || S.noDb) note.textContent = "Simulation : ce montant n'est pas enregistré.";
   }
 
-  /* ---------------- chart ---------------- */
-  let chartW = 0;
+  /* ---------------- chart scale (Banque charts) ---------------- */
   function niceStep(max, count) {
     const raw = max / count;
     const p = Math.pow(10, Math.floor(Math.log10(raw)));
     const f = raw / p;
     return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
-  }
-
-  function renderChart() {
-    const box = $("chart");
-    const empty = $("chart-empty");
-    box.querySelectorAll("svg, .tip").forEach((n) => n.remove());
-    if (!S.proj) {
-      empty.hidden = false;
-      empty.textContent = "";
-      empty.append(el("span", {}, S.loaded
-        ? (S.noDb ? "Vos comptes n'ont pas pu être chargés ici." : "Ajoutez vos soldes du mois pour voir la courbe de votre capital.")
-        : "La courbe de votre capital apparaît ici dès que vos soldes sont chargés."));
-      return;
-    }
-    empty.hidden = true;
-    const rows = S.proj.rows;
-    const isCap = S.view === "capital";
-    const kS = isCap ? "sans" : "sansPassif";
-    const kA = isCap ? "avec" : "avecPassif";
-    const W = Math.max(280, box.clientWidth || 600);
-    chartW = W;
-    const narrow = W < 560;
-    const H = narrow ? 250 : 330;
-    const m = { t: 18, r: narrow ? 12 : 20, b: 28, l: narrow ? 58 : 70 };
-    const iw = W - m.l - m.r, ih = H - m.t - m.b;
-    const maxV = Math.max(1e-9, ...rows.map((r) => Math.max(r[kS], r[kA])));
-    const stepV = niceStep(maxV, narrow ? 4 : 5);
-    const top = Math.ceil(maxV / stepV) * stepV;
-    const n = rows.length;
-    const x = (i) => m.l + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
-    const y = (v) => m.t + ih - (v / top) * ih;
-    const fmtTick = (v) => (top >= 100 ? EUR0.format(v) : (top >= 10 ? EUR0.format(v) : EUR2.format(v)));
-
-    const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", tabindex: "0", role: "img",
-      "aria-label": `${isCap ? "Capital" : "Revenus passifs par mois"} de ${monthLong(rows[0].ym)} à ${monthLong(rows[n - 1].ym)} : ${eur(rows[n - 1][kA])} avec épargne, ${eur(rows[n - 1][kS])} sans rien ajouter.` });
-    const g = sv("g", { class: "grid" });
-    const ax = sv("g", { class: "axis" });
-    for (let v = 0; v <= top + 1e-9; v += stepV) {
-      g.append(sv("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v) }));
-      ax.append(sv("text", { x: m.l - 8, y: y(v) + 4, "text-anchor": "end" }, fmtTick(v)));
-    }
-    svg.append(g);
-    svg.append(sv("line", { class: "baseline", x1: m.l, x2: W - m.r, y1: y(0), y2: y(0) }));
-    // year ticks on each January
-    const janIdx = rows.map((r, i) => (r.t % 12 === 0 ? i : -1)).filter((i) => i >= 0);
-    const every = Math.max(1, Math.ceil(janIdx.length / Math.max(2, Math.floor(iw / 64))));
-    janIdx.forEach((i, k) => {
-      if (k % every) return;
-      ax.append(sv("text", { x: x(i), y: H - 8, "text-anchor": "middle" }, String(Math.floor(rows[i].t / 12))));
-    });
-    svg.append(ax);
-
-    // Livret Jeune closing marker (and any other closing account)
-    S.proj.comptes.forEach((c) => {
-      if (!c.fermeture) return;
-      const i = rows.findIndex((r) => r.t === toIdx(c.fermeture) + 1);
-      if (i <= 0) return;
-      const mk = sv("g", { class: "marker" });
-      mk.append(sv("line", { x1: x(i), x2: x(i), y1: m.t, y2: m.t + ih }));
-      const leftSide = x(i) - 126 > m.l;
-      mk.append(sv("text", { x: x(i) + (leftSide ? -6 : 6), y: m.t + 10, "text-anchor": leftSide ? "end" : "start" }, `${c.nom} fermé`));
-      svg.append(mk);
-    });
-
-    const path = (k) => rows.map((r, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(r[k]).toFixed(1)}`).join("");
-    svg.append(sv("path", { class: "line sans", d: path(kS) }));
-    svg.append(sv("path", { class: "line avec", d: path(kA) }));
-    rows.forEach((r, i) => { if (r.real) svg.append(sv("circle", { class: "dot-real", cx: x(i), cy: y(r[kS]), r: 4.5 })); });
-
-    // end labels, kept apart
-    const last = rows[n - 1];
-    let ya = y(last[kA]) - 10, ys = y(last[kS]) - 10;
-    if (Math.abs(ya - ys) < 16) { if (last[kA] >= last[kS]) ya = ys - 16; else ys = ya - 16; }
-    const lab = (yy, name, v) => {
-      const t = sv("text", { class: "end-label", x: W - m.r, y: Math.max(m.t + 12, Math.min(m.t + ih - 4, yy)), "text-anchor": "end" });
-      t.append(sv("tspan", {}, name + " "), sv("tspan", { class: "v" }, eur(v)));
-      return t;
-    };
-    const endLabels = [lab(ya, `Avec ${EUR0.format(saving())}/mois :`, last[kA]), lab(ys, "Sans rien ajouter :", last[kS])];
-    svg.append(...endLabels);
-
-    // hover layer
-    const cross = sv("line", { class: "cross", y1: m.t, y2: m.t + ih, visibility: "hidden" });
-    const hdS = sv("circle", { class: "hover-dot sans", r: 5, visibility: "hidden" });
-    const hdA = sv("circle", { class: "hover-dot avec", r: 5, visibility: "hidden" });
-    svg.append(cross, hdS, hdA);
-    const hit = sv("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" });
-    svg.append(hit);
-    box.append(svg);
-    // keep the closing-marker label clear of the end labels
-    const overlap = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-    svg.querySelectorAll(".marker text").forEach((t) => {
-      try {
-        for (let k = 0; k < 12 && endLabels.some((e) => overlap(t.getBBox(), e.getBBox())); k++) {
-          t.setAttribute("y", String(Number(t.getAttribute("y")) + 16));
-        }
-      } catch (e) { /* getBBox unavailable: leave as is */ }
-    });
-    const tip = el("div", { class: "tip", hidden: "" });
-    box.append(tip);
-
-    const show = (i) => {
-      if (i < 0 || i >= n) { hide(); return; }
-      S.hover = i;
-      const r = rows[i];
-      [cross].forEach((c) => { c.setAttribute("x1", x(i)); c.setAttribute("x2", x(i)); c.setAttribute("visibility", "visible"); });
-      hdS.setAttribute("cx", x(i)); hdS.setAttribute("cy", y(r[kS])); hdS.setAttribute("visibility", "visible");
-      hdA.setAttribute("cx", x(i)); hdA.setAttribute("cy", y(r[kA])); hdA.setAttribute("visibility", "visible");
-      tip.textContent = "";
-      tip.append(el("h3", {}, monthLong(r.ym)));
-      if (r.real) tip.append(el("div", { class: "tag" }, "Votre relevé"));
-      const unit = isCap ? "" : " /mois";
-      const row = (cls, label, v) => {
-        const d = el("div", { class: "row" });
-        const k = el("span", { class: "k" });
-        k.append(el("i", cls === "avec" ? { class: "avec" } : {}), label);
-        d.append(k, el("span", { class: "num" }, eur(v) + unit));
-        return d;
-      };
-      tip.append(row("avec", `Avec ${EUR0.format(saving())}/mois`, r[kA]));
-      tip.append(row("sans", "Sans rien ajouter", r[kS]));
-      const parts = el("div", { class: "parts" });
-      parts.append(el("div", { class: "tag" }, isCap ? "Détail avec épargne" : "Capital avec épargne"));
-      if (isCap) {
-        S.proj.comptes.forEach((c, j) => {
-          const d = el("div", { class: "row" });
-          d.append(el("span", {}, c.nom), el("span", { class: "num" }, eur(r.avecParts[j])));
-          parts.append(d);
-        });
-      } else {
-        const d = el("div", { class: "row" });
-        d.append(el("span", {}, "Total"), el("span", { class: "num" }, eur(r.avec)));
-        parts.append(d);
-      }
-      tip.append(parts);
-      tip.hidden = false;
-      const bw = box.clientWidth, tw = tip.offsetWidth, th = tip.offsetHeight;
-      const scale = bw / W;
-      let left = x(i) * scale + 14;
-      if (left + tw > bw) left = x(i) * scale - tw - 14;
-      left = Math.max(0, left);
-      let topPx = Math.min(y(Math.max(r[kA], r[kS])) * scale, box.clientHeight - th);
-      topPx = Math.max(0, topPx - th / 2);
-      tip.style.transform = `translate(${left}px, ${topPx}px)`;
-    };
-    const hide = () => {
-      S.hover = -1;
-      tip.hidden = true;
-      [cross, hdS, hdA].forEach((c) => c.setAttribute("visibility", "hidden"));
-    };
-    const fromEvent = (ev) => {
-      const rect = svg.getBoundingClientRect();
-      const px = ((ev.clientX - rect.left) / rect.width) * W;
-      return Math.round(((px - m.l) / iw) * (n - 1));
-    };
-    svg.addEventListener("pointermove", (ev) => show(Math.max(0, Math.min(n - 1, fromEvent(ev)))));
-    svg.addEventListener("pointerdown", (ev) => show(Math.max(0, Math.min(n - 1, fromEvent(ev)))));
-    svg.addEventListener("pointerleave", hide);
-    svg.addEventListener("blur", hide);
-    svg.addEventListener("keydown", (ev) => {
-      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
-        ev.preventDefault();
-        const cur = S.hover < 0 ? 0 : S.hover;
-        show(Math.max(0, Math.min(n - 1, cur + (ev.key === "ArrowRight" ? 1 : -1))));
-      } else if (ev.key === "Home") { ev.preventDefault(); show(0); }
-      else if (ev.key === "End") { ev.preventDefault(); show(n - 1); }
-      else if (ev.key === "Escape") hide();
-    });
-  }
-
-  function renderYears() {
-    const t = $("years-table");
-    t.textContent = "";
-    if (!S.proj) return;
-    const rows = S.proj.rows;
-    const pick = rows.filter((r, i) => i === 0 || r.t % 12 === 0 || i === rows.length - 1);
-    const head = el("tr");
-    ["Mois", "Sans rien ajouter", `Avec ${EUR0.format(saving())} par mois`, "Rapporte par mois (avec épargne)"].forEach((h, i) => head.append(el("th", i ? { class: "r" } : {}, h)));
-    const thead = el("thead"); thead.append(head);
-    const tb = el("tbody");
-    pick.forEach((r) => {
-      const tr = el("tr");
-      tr.append(el("td", {}, monthLong(r.ym)));
-      tr.append(el("td", { class: "r num" }, eur(r.sans)));
-      tr.append(el("td", { class: "r num" }, eur(r.avec)));
-      tr.append(el("td", { class: "r num" }, EUR2.format(r.avecPassif)));
-      tb.append(tr);
-    });
-    t.append(thead, tb);
   }
 
   function renderAccounts() {
@@ -528,25 +433,61 @@
       bar.append(seg);
     });
     if (total > 0) box.append(bar);
+    // the bar and the « % du total » leave negative balances out: say so next to the bar
+    if (total > 0 && bal.some((v) => v < 0)) box.append(el("p", { class: "acc-note" }, "Répartition hors soldes négatifs"));
+    // a row opens the same window as « Gérer mes comptes », on this account's balance
+    const canEdit = S.loaded && S.canWrite !== false;
     comptes.forEach((c, i) => {
       const rate = Number(c.taux) || 0;
-      const row = el("div", { class: "acc-row" });
+      const share = accountShare(bal, i);
+      const row = el(canEdit ? "button" : "div", { class: "acc-row" + (canEdit ? " acc-go" : "") });
+      if (canEdit) {
+        row.type = "button";
+        row.setAttribute("aria-label", `${c.nom}, ${EUR2.format(bal[i])} : modifier ce compte`);
+        row.addEventListener("click", () => {
+          openEdit();
+          $("edit").scrollIntoView({ block: "start" });
+          const input = $(`ed-solde-${i}`);
+          if (input) input.focus();
+        });
+      }
       if (c.description) row.title = c.description;
-      const info = el("div");
-      info.append(el("div", { class: "acc-name" }, c.nom));
-      info.append(el("div", { class: "acc-type" }, [c.type || "Compte", PCT.format(rate)].join(" · ")));
-      const chips = el("div", { class: "chips" });
+      const ico = el("span", { class: "acc-ico", "aria-hidden": "true" });
+      ico.append(accountIcon(accountKind(c)), el("span", { class: "acc-dot c" + (i % 5) }));
+      const info = el("span", { class: "acc-info" });
+      info.append(el("span", { class: "acc-name" }, c.nom));
+      const sub = [c.type || "Compte"];
+      if (rate > 0) sub.push(`${PCT.format(rate)} par an`);
+      if (share != null) sub.push(`${PCT0.format(share)} du total`);
+      info.append(el("span", { class: "acc-type" }, sub.join(" · ")));
+      const chips = el("span", { class: "chips" });
       if (c.plafondVersements) {
         const room = Math.max(0, c.plafondVersements - bal[i]);
         chips.append(el("span", { class: "chip" }, `Place avant le plafond : ${EUR2.format(room)}`));
       }
       if (c.fermeture) chips.append(el("span", { class: "chip" }, `À fermer fin ${c.fermeture.slice(0, 4)}`));
       if (chips.childNodes.length) info.append(chips);
-      const amt = el("div", { class: "acc-amt" }, EUR2.format(bal[i]));
+      const amt = el("span", { class: "acc-amt" + (bal[i] < 0 ? " low" : "") }, EUR2.format(bal[i]));
       if (rate > 0) amt.append(el("span", { class: "acc-gain" }, `+${EUR2.format(bal[i] * rate / 12)} /mois`));
-      row.append(el("span", { class: "acc-dot c" + (i % 5), "aria-hidden": "true" }), info, amt);
+      row.append(ico, info, amt);
+      if (canEdit) row.append(el("span", { class: "acc-chev", "aria-hidden": "true" }, "›"));
       box.append(row);
     });
+  }
+  /** Line icon for the accounts list, in the style of the menu icons. */
+  function accountIcon(kind) {
+    const icons = {
+      courant: ["M3 10h18", "M16 14h2", "rect"],
+      livret: ["M5 7c0 1.7 3.1 3 7 3s7-1.3 7-3-3.1-3-7-3-7 1.3-7 3z", "M5 7v5c0 1.7 3.1 3 7 3s7-1.3 7-3V7", "M5 12v5c0 1.7 3.1 3 7 3s7-1.3 7-3v-5"],
+      bourse: ["M3 3v18h18", "M7 15l4-4 3 3 5-6"],
+      assurance: ["M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"],
+      autre: ["M3 10l9-6 9 6", "M5 10v8M9 10v8M15 10v8M19 10v8", "M3 21h18"],
+    };
+    const s = sv("svg", { class: "ic", viewBox: "0 0 24 24" });
+    (icons[kind] || icons.autre).forEach((d) => {
+      s.append(d === "rect" ? sv("rect", { x: "3", y: "6", width: "18", height: "13", rx: "2" }) : sv("path", { d }));
+    });
+    return s;
   }
 
   /* --- résumés sur l'écran Patrimoine : budget et dernier relevé --- */
@@ -558,10 +499,8 @@
       .slice().sort((x, y) => Number(y.montant) - Number(x.montant));
     const t = budgetTotals(S.doc);
     if (!deps.length) {
-      box.append(el("p", { class: "pk-empty" }, "Ajoutez vos dépenses du mois dans « Mes dépenses » pour les voir ici."));
-      const go = el("button", { class: "go", type: "button" }, "Ouvrir Mes dépenses →");
-      go.addEventListener("click", () => setTab("depenses"));
-      box.append(go);
+      // the « Voir tout mon budget » link under the panel opens Budget
+      box.append(el("p", { class: "pk-empty" }, "Ajoutez vos dépenses du mois dans « Budget » pour les voir ici."));
       return;
     }
     sum.append(`Rentrées ${EUR2.format(t.recettes)} · Dépenses `, el("b", {}, EUR2.format(t.depenses)));
@@ -585,39 +524,77 @@
 
   function renderPatBank() {
     const box = $("pat-bank"), when = $("pat-bank-when");
-    box.textContent = ""; when.textContent = "";
-    const go = el("button", { class: "go", type: "button" }, "Ouvrir Ma banque →");
+    box.textContent = ""; when.textContent = ""; $("pk-title").textContent = "Dernier relevé";
+    const go = el("button", { class: "go", type: "button" }, "Ouvrir Banque →");
+    const foot = el("div", { class: "bilan-foot" });
     const m = RL ? bankModel() : null;
     const last = m && m.releves.length ? m.releves[m.releves.length - 1] : null;
     if (!last) {
-      box.append(el("p", { class: "pk-empty" }, "Ajoutez vos relevés PDF dans « Ma banque » pour comparer ce qui s'est passé avec votre budget."));
+      box.append(el("p", { class: "pk-empty" }, "Ajoutez vos relevés PDF dans « Banque » pour comparer ce qui s'est passé avec votre budget."));
       go.addEventListener("click", () => setTab("banque"));
-      box.append(go);
+      foot.append(go);
+      box.append(foot);
       return;
     }
-    when.textContent = periodChip(last);
+    // « Bilan de [mois] » et la période exacte du relevé ; mêmes calculs qu'avant (periodStats, planTotals)
+    $("pk-title").textContent = bilanTitle(last.fin);
+    when.textContent = periodLabel(last);
     const st = periodStats(m, last.id);
     const plan = planTotals();
-    const dl = el("dl", { class: "pk" });
-    const row = (k, v, cls, prevu, tot) => {
-      const dd = el("dd", { class: [cls, tot ? "tot" : ""].filter(Boolean).join(" ") });
-      if (prevu != null && plan.has) dd.append(el("span", { class: "plan" }, `prévu ${EUR0.format(prevu)}`));
-      dd.append(v);
-      dl.append(el("dt", tot ? { class: "tot" } : {}, k), dd);
+    const tone = (v) => (v > 0.004 ? "v-good" : v < -0.004 ? "v-bad" : "");
+    const fig = (k, v, cls, note) => {
+      const d = el("div", { class: "bilan-fig" });
+      d.append(el("span", { class: "bilan-k" }, k), el("span", { class: ["bilan-v", cls].filter(Boolean).join(" ") }, v));
+      if (note) d.append(el("span", { class: "bilan-plan" }, note));
+      return d;
     };
-    row("Entrées", EUR2.format(st.inn), "", plan.inn);
-    row("Dépenses", EUR2.format(st.out), "v-dep", plan.out);
-    if (Math.abs(st.epargne) > 0.004) row("Mis de côté", signed(st.epargne), st.epargne > 0 ? "v-good" : "v-bad", plan.epargne);
-    row("Reste", signed(st.reste), st.reste < 0 ? "v-bad" : "v-good", null, true);
-    box.append(dl);
+    // 1er niveau : Entrées et Dépenses ; le budget prévu sous Dépenses seulement, quand il existe
+    const main = el("div", { class: "bilan-row bilan-main" });
+    main.append(
+      fig("Entrées", money(st.inn), st.inn < -0.004 ? "v-bad" : ""),
+      fig("Dépenses", money(st.out), st.out < -0.004 ? "v-bad" : "", plan.has && plan.out > 0.004 ? `Budget prévu : ${EUR2.format(plan.out)}` : ""),
+    );
+    // 2e niveau, après un séparateur : Mis de côté et Reste, signes conservés
+    const sub = el("div", { class: "bilan-row bilan-sub" });
+    sub.append(fig("Mis de côté", signed(st.epargne), tone(st.epargne)), fig("Reste", signed(st.reste), st.reste < -0.004 ? "v-bad" : ""));
+    box.append(main, sub);
     let incV = 0;
     m.releves.forEach((r) => { m.b.ops.forEach((o) => { if (o.rel === r.id && m.cat.get(o.id) === "c:incidents") incV -= o.montant; }); });
     if (incV > 0.004) {
       const n = m.releves.length;
-      box.append(el("p", { class: "pk-alert" }, `${EUR0.format(incV)} de frais d'incident sur ${n > 1 ? `vos ${n} relevés` : "ce relevé"}.`));
+      foot.append(el("p", { class: "bilan-alert" }, `${EUR0.format(incV)} de frais d'incident sur ${n > 1 ? `vos ${n} relevés` : "ce relevé"}.`));
     }
     go.addEventListener("click", () => { S.bk.rel = last.id; S.bk.ask = null; try { localStorage.setItem("patrimoine-bk-rel", last.id); } catch (e) {} setTab("banque"); });
-    box.append(go);
+    foot.append(go);
+    box.append(foot);
+  }
+
+  /** « Vos derniers documents » : the 3 latest statements whose PDF is on this device, each with « Consulter ». */
+  function renderPatDocs() {
+    const box = $("docs-list"), msg = $("docs-msg");
+    box.textContent = "";
+    const docs = recentDocs(bankOf(S.doc).releves, 3);
+    $("docs-foot").hidden = !docs.length;
+    if (!docs.length) {
+      msg.textContent = "";
+      box.append(el("p", { class: "pk-empty" }, "Aucun relevé PDF pour l'instant. Ajoutez vos relevés dans « Banque » pour les retrouver ici."));
+      return;
+    }
+    docs.forEach((r) => {
+      const month = monthLong(r.fin.slice(0, 7));
+      const name = `Relevé — ${month.charAt(0).toUpperCase()}${month.slice(1)}`;
+      const ico = el("span", { class: "acc-ico doc-ico", "aria-hidden": "true" });
+      const s = sv("svg", { class: "ic", viewBox: "0 0 24 24" });
+      ["M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5", "M9 13h6", "M9 17h4"].forEach((d) => s.append(sv("path", { d })));
+      ico.append(s);
+      const info = el("span", { class: "doc-text" });
+      info.append(el("span", { class: "doc-name" }, name), el("span", { class: "doc-period" }, periodLabel(r)));
+      const open = el("button", { class: "btn", type: "button", "aria-label": `Consulter le PDF du relevé ${periodChip(r)}` }, "Consulter");
+      open.addEventListener("click", () => { msg.textContent = ""; openPdf(r, (text) => { msg.textContent = text; }); });
+      const row = el("div", { class: "doc-row" });
+      row.append(ico, info, open);
+      box.append(row);
+    });
   }
 
   function renderHistory() {
@@ -769,7 +746,6 @@
     try { history.replaceState(null, "", "#" + t); } catch (e) {}
     renderTabs();
     renderHeader();
-    if (t === "patrimoine") renderChart();
     if (t === "banque") renderBank();
     if (focus) $("t-" + t).focus();
   }
@@ -800,6 +776,57 @@
   if (darkMq && darkMq.addEventListener) darkMq.addEventListener("change", renderTheme);
   renderTheme();
 
+  /* ---------------- réglages, en-tête et accueil ---------------- */
+  const settings = $("settings-dialog");
+  function openSettings() {
+    if (settings.open) return;
+    if (typeof settings.showModal === "function") settings.showModal(); else settings.setAttribute("open", "");
+  }
+  function closeSettings() {
+    if (!settings.open) return;
+    if (typeof settings.close === "function") settings.close(); else settings.removeAttribute("open");
+  }
+  // the "MP" button opens a small menu that holds "Réglages"
+  const avatar = $("avatar-settings"), profile = $("profile"), profilePop = $("profile-pop");
+  function setProfileMenu(open) {
+    profilePop.hidden = !open;
+    avatar.setAttribute("aria-expanded", String(open));
+  }
+  avatar.addEventListener("click", () => {
+    const open = profilePop.hidden;
+    setProfileMenu(open);
+    if (open) $("settings-open").focus();
+  });
+  profile.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || profilePop.hidden) return;
+    setProfileMenu(false);
+    avatar.focus();
+  });
+  // leaving the menu with Tab, or clicking elsewhere, closes it
+  profile.addEventListener("focusout", (e) => {
+    if (e.relatedTarget && !profile.contains(e.relatedTarget)) setProfileMenu(false);
+  });
+  document.addEventListener("click", (e) => {
+    if (!profilePop.hidden && !profile.contains(e.target)) setProfileMenu(false);
+  });
+  $("settings-open").addEventListener("click", () => { setProfileMenu(false); openSettings(); });
+  // the "Réglages" button is hidden once the window closes, so the focus goes back to "MP"
+  settings.addEventListener("close", () => avatar.focus());
+  $("settings-close").addEventListener("click", closeSettings);
+  // a click on the dimmed background closes the window
+  settings.addEventListener("click", (e) => {
+    if (e.target !== settings) return;
+    const r = settings.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) closeSettings();
+  });
+  // the messages about a backup, an import or its undo show on the page, not behind this window
+  ["btn-backup", "btn-import", "btn-undo-import"].forEach((id) => $(id).addEventListener("click", closeSettings));
+  $("wordmark").addEventListener("click", (e) => { e.preventDefault(); setTab("patrimoine"); });
+  $("welcome-start").addEventListener("click", () => { setTab("patrimoine"); openEdit(); });
+  $("welcome-import").addEventListener("click", () => $("file-import").click());
+  $("manage-accounts").addEventListener("click", () => { openEdit(); $("edit").scrollIntoView({ block: "start" }); });
+  $("open-budget").addEventListener("click", () => { setTab("depenses"); window.scrollTo(0, 0); });
+
   /* ---------------- budget ---------------- */
   const GROUPS = [["recettes", "Ce qui rentre"], ["depenses", "Ce que je dépense"]];
   function renderBudget() {
@@ -807,11 +834,18 @@
     const b = budgetOf(S.doc);
     $("b-in").textContent = t ? EUR2.format(t.recettes) : "—";
     $("b-out").textContent = t ? EUR2.format(t.depenses) : "—";
-    $("b-rest").textContent = t ? EUR2.format(t.reste) : "—";
     $("b-in-sub").textContent = b ? `par mois · ${(b.recettes || []).length} ligne${(b.recettes || []).length > 1 ? "s" : ""}` : "par mois";
     $("b-out-sub").textContent = b ? `par mois · ${(b.depenses || []).length} ligne${(b.depenses || []).length > 1 ? "s" : ""}` : "par mois";
-    const rs = $("b-rest-sub");
-    rs.textContent = t ? `dont ${EUR0.format(saving())} mis de côté · ${EUR2.format(t.reste - saving())} pour vivre` : "par mois";
+    // same figures and rules as the Vue globale cards and month bar
+    const f = cashFlow(t, saving());
+    $("b-saving").textContent = S.doc ? EUR0.format(saving()) : "—";
+    $("b-saving-sub").textContent = f && f.ratio != null ? `${f.ratio} % de vos revenus` : "par mois";
+    paintLeft("b-left", leftCard(margeMois(), saving(), hasBudget(S.doc)));
+    [["b-cash-spending", "spending"], ["b-cash-saving", "saving"], ["b-cash-left", "left"]]
+      .forEach(([id, k]) => { $(id).textContent = f ? EUR0.format(f[k]) : "—"; });
+    $("b-cash-left-item").classList.toggle("v-bad", !!f && f.left < 0);
+    $("b-flow-spending").style.width = `${f ? f.wSpending : 0}%`;
+    $("b-flow-saving").style.width = `${f ? f.wSaving : 0}%`;
     $("bud-edit-btn").hidden = !(S.loaded && S.canWrite !== false) || S.budEditing;
     $("bud-view").hidden = S.budEditing;
     $("bud-edit").hidden = !S.budEditing;
@@ -976,7 +1010,7 @@
       const avg = L.row.sans > 0 ? yearly / L.row.sans : 0;
       const rates = S.proj.comptes.filter((c) => Number(c.taux) > 0).map((c) => `${c.nom} ${PCTR.format(Number(c.taux))}`).join(", ");
       const p3 = el("p", { class: "muted" });
-      p3.append(`Aujourd'hui, ton argent rapporte en moyenne ${PCTR.format(avg)} par an${rates ? ` (${rates})` : ""}. Tu peux tester d'autres chiffres dans l'onglet « Tester ».`);
+      p3.append(`Aujourd'hui, ton argent rapporte en moyenne ${PCTR.format(avg)} par an${rates ? ` (${rates})` : ""}. Tu peux tester d'autres chiffres dans l'onglet « Projets ».`);
       facts.append(p3);
     }
   }
@@ -1377,16 +1411,17 @@
     await saveBank({ ...b, releves: b.releves.filter((r) => r.id !== id), ops: b.ops.filter((o) => o.rel !== id) });
   }
 
-  async function openPdf(rel) {
+  /** Opens a statement's PDF. `say` shows a problem where the button is (Banque by default). */
+  async function openPdf(rel, say = (text) => setBkMsg(text, true)) {
     let rec = null;
     try { rec = await IDB.get(rel.id); } catch (e) {}
-    if (!rec || !rec.data) { setBkMsg("Le fichier PDF de ce relevé n'est pas sur cet appareil.", true); return; }
+    if (!rec || !rec.data) { say("Le fichier PDF de ce relevé n'est pas sur cet appareil."); return; }
     const name = rec.name || `releve-${rel.fin}.pdf`;
     const Cap = window.Capacitor;
     try {
       if (window.patrimoineDesktop && window.patrimoineDesktop.openPdf) {
         const err = await window.patrimoineDesktop.openPdf(name, new Uint8Array(rec.data));
-        if (err) setBkMsg("Windows n'a pas trouvé de programme pour ouvrir les PDF.", true);
+        if (err) say("Windows n'a pas trouvé de programme pour ouvrir les PDF.");
         return;
       }
       if (Cap && typeof Cap.isNativePlatform === "function" && Cap.isNativePlatform()) {
@@ -1399,7 +1434,7 @@
         return;
       }
     } catch (e) {
-      if (!/cancel/i.test(String(e && e.message))) setBkMsg("Le relevé n'a pas pu s'ouvrir.", true);
+      if (!/cancel/i.test(String(e && e.message))) say("Le relevé n'a pas pu s'ouvrir.");
       return;
     }
     const url = URL.createObjectURL(new Blob([rec.data], { type: "application/pdf" }));
@@ -1464,7 +1499,7 @@
       $(id).textContent = fmt(value);
       const sub = $(id + "-sub");
       sub.textContent = "";
-      if (!plan.has) { sub.append("Remplissez « Mes dépenses » pour comparer"); return; }
+      if (!plan.has) { sub.append("Remplissez « Budget » pour comparer"); return; }
       sub.append(`prévu ${fmt(planV)} · `, deltaEl(value, planV, higherIsGood));
     };
     fill("bk-in", st.inn, plan.inn, true, money);
@@ -2049,12 +2084,7 @@
   $("save-range").addEventListener("input", (e) => setSaving(e.target.value, true));
   $("save-minus").addEventListener("click", () => setSaving(saving() - 10, true));
   $("save-plus").addEventListener("click", () => setSaving(saving() + 10, true));
-  document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => {
-    S.view = b.dataset.view; try { localStorage.setItem("patrimoine-view", S.view); } catch (e) {} render();
-  }));
-  document.querySelectorAll("[data-age]").forEach((b) => b.addEventListener("click", () => {
-    S.age = Number(b.dataset.age); try { localStorage.setItem("patrimoine-age", String(S.age)); } catch (e) {} render();
-  }));
+  $("docs-open-bank").addEventListener("click", () => setTab("banque"));
   $("btn-edit").addEventListener("click", openEdit);
   $("ed-cancel").addEventListener("click", closeEdit);
   $("ed-save").addEventListener("click", saveEdit);
@@ -2064,14 +2094,6 @@
     const i = S.draft.rows.length - 1;
     const n = $(`ed-name-${i}`); if (n) n.focus();
   });
-
-  let rz = 0;
-  const ro = new ResizeObserver(() => {
-    const w = $("chart").clientWidth;
-    if (Math.abs(w - chartW) < 2) return;
-    cancelAnimationFrame(rz); rz = requestAnimationFrame(renderChart);
-  });
-  ro.observe($("chart"));
 
   render();
 
@@ -2151,6 +2173,7 @@
   function reportWrite(err) {
     const was = S.unsaved;
     S.unsaved = err || null;
+    renderDataStatus();
     // saved again: the note under the saving lever must not keep saying the opposite
     const note = $("saved-note");
     if (!err && was && note && note.textContent === NOTE_KEPT) note.textContent = "Enregistré";
@@ -2359,7 +2382,7 @@
     return { ok: true };
   }
   /** Tries the whole display with this data, as it will be just after the import (nothing waiting to be
-   *  written, simulator reset), then puts the current data back on screen. The details of « Ma banque »
+   *  written, simulator reset), then puts the current data back on screen. The details of « Banque »
    *  are only drawn while its tab is open, so that tab is tried too. Nothing is written meanwhile. */
   function rendersWith(doc) {
     const keep = { doc: S.doc, tab: S.tab, saving: S.saving, rate: S.rate, sim: S.sim, rel: S.bk.rel };
@@ -2536,7 +2559,7 @@
       if (S.saving != null && S.doc && Number(S.doc.epargneMensuelle) === S.saving) S.saving = null;
       if (S.rate != null && S.doc && Number(S.doc.rendementCible) === S.rate) S.rate = null;
       if (!S.editing) render();
-      else { renderFigures(); renderChart(); renderAccounts(); renderHistory(); renderBudget(); renderFreedom(); renderSim(); }
+      else { renderFigures(); renderPatDocs(); renderAccounts(); renderHistory(); renderBudget(); renderFreedom(); renderSim(); }
     }, () => { S.loaded = true; S.noDb = true; render(); });
   })();
 })();
